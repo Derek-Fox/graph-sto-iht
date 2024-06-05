@@ -309,6 +309,21 @@ def algo_graph_sto_iht(
     run_time = time.time() - start_time
     return x_err, num_epochs, run_time
 
+def calc_grad(x_mat, y_tr, x_hat, block):
+    """ Calculate the gradient w.r.t. the block of data, at x_hat.
+    :param x_mat:   the design matrix.
+    :param y_tr:    the array of measurements.
+    :param x_hat:   the current estimation.
+    :param x_tr_t:  the transpose of the design matrix.
+    :param block:   the block as range.
+    :return:        the gradient.
+    """
+    x_tr_t = np.transpose(x_mat)
+    xtx = np.dot(x_tr_t[:, block], x_mat[block])
+    xty = np.dot(x_tr_t[:, block], y_tr[block])
+    return -2. * (xty - np.dot(xtx, x_hat))
+
+
 def algo_graph_svrg_iht(
         x_mat, y_tr, max_epochs, lr, x_star, x0, tol_algo, edges, costs, s, b,
         g=1, root=-1, gamma=0.1, proj_max_num_iter=50, verbose=0):
@@ -337,7 +352,6 @@ def algo_graph_svrg_iht(
     np.random.seed()
     start_time = time.time()
     x_hat = np.copy(x0)
-    x_tr_t = np.transpose(x_mat)
 
     # graph projection para
     h_low = int(len(x0) / 2)
@@ -350,38 +364,33 @@ def algo_graph_svrg_iht(
     # just treat it as a single block (batch)
     b = n if n < b else b
     num_blocks = int(n) / int(b)
-    prob = [1. / num_blocks] * num_blocks
 
     num_epochs = 0
 
     for epoch_i in range(max_epochs):
         num_epochs += 1
-        xtx = np.dot(x_tr_t, x_mat)
-        xty = np.dot(x_tr_t, y_tr)
-        outer_grad = -2. * (xty - np.dot(xtx, x_hat))
-        x_nil = x_hat
+        outer_grad = calc_grad(x_mat, y_tr, x_hat, range(n))
+        x_nil = np.copy(x_hat)
         for _ in range(num_blocks):
-            ii = np.random.randint(0, num_blocks)
-            block = range(b * ii, b * (ii + 1))
-            xtx_slice = np.dot(x_tr_t[:, block], x_mat[block])
-            xty_slice = np.dot(x_tr_t[:, block], y_tr[block])
-            inner_grad_1 = -2. * (xty_slice - np.dot(xtx_slice, x_nil))
-            inner_grad_2 = -2. * (xty_slice - np.dot(xtx_slice, x_hat))
+            block_idx = np.random.randint(0, num_blocks)
+            block = range(b * block_idx, b * (block_idx + 1))
+            inner_grad_1 = calc_grad(x_mat, y_tr, x_nil, block)
             if epoch_i < 1:
                 gradient = inner_grad_1
             else:
+                inner_grad_2 = calc_grad(x_mat, y_tr, x_hat, block)
                 gradient = inner_grad_1 - inner_grad_2 + outer_grad
-            head_nodes, proj_grad = algo_head_tail_bisearch(
+            proj_grad = algo_head_tail_bisearch(
                 edges, gradient, costs, g, root, h_low, h_high,
-                proj_max_num_iter, verbose)
-            bt = x_nil - (lr / (prob[ii] * num_blocks)) * proj_grad
-            tail_nodes, proj_bt = algo_head_tail_bisearch(
+                proj_max_num_iter, verbose)[1]
+            bt = x_nil - lr * proj_grad
+            proj_bt = algo_head_tail_bisearch(
                 edges, bt, costs, g, root,
-                t_low, t_high, proj_max_num_iter, verbose)
+                t_low, t_high, proj_max_num_iter, verbose)[1]
             x_nil = proj_bt
         x_hat = x_nil
-        print("Epoch:", epoch_i, "Residual norm:", np.linalg.norm(y_tr - np.dot(x_mat, x_hat)), "x_hat norm:", np.linalg.norm(x_hat))
-        if np.linalg.norm(x_hat) >= 1e3:  # diverge cases.
+        # print("Epoch:", epoch_i, "Residual norm:", np.linalg.norm(y_tr - np.dot(x_mat, x_hat)), "x_hat norm:", np.linalg.norm(x_hat))
+        if np.linalg.norm(x_hat) >= 1e5:  # diverge cases.
             break
         if np.linalg.norm(y_tr - np.dot(x_mat, x_hat)) <= tol_algo:
             break
@@ -391,7 +400,7 @@ def algo_graph_svrg_iht(
 
 
 def print_helper(method, trial_i, b, n, num_epochs, err, run_time):
-    print('%13s   trial_%03d b: %02d n: %03d num_epochs: %03d '
+    print('%15s   trial_%03d b: %02d n: %03d num_epochs: %03d '
           'rec_error: %.6e run_time: %.6e' %
           (method, trial_i, b, n, num_epochs, err, run_time))
 
