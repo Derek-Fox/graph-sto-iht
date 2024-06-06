@@ -380,13 +380,13 @@ def algo_graph_svrg_iht(
             else:
                 inner_grad_2 = calc_grad(x_mat, y_tr, x_hat, block)
                 gradient = inner_grad_1 - inner_grad_2 + outer_grad
-            proj_grad = algo_head_tail_bisearch(
+            head_nodes, proj_grad = algo_head_tail_bisearch(
                 edges, gradient, costs, g, root, h_low, h_high,
-                proj_max_num_iter, verbose)[1]
+                proj_max_num_iter, verbose)
             bt = x_nil - lr * proj_grad
-            proj_bt = algo_head_tail_bisearch(
+            tail_nodes, proj_bt = algo_head_tail_bisearch(
                 edges, bt, costs, g, root,
-                t_low, t_high, proj_max_num_iter, verbose)[1]
+                t_low, t_high, proj_max_num_iter, verbose)
             x_nil = proj_bt
         x_hat = x_nil
         # print("Epoch:", epoch_i, "Residual norm:", np.linalg.norm(y_tr - np.dot(x_mat, x_hat)), "x_hat norm:", np.linalg.norm(x_hat))
