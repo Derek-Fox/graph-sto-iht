@@ -756,8 +756,20 @@ def generate_figures(root_p, save_data_path):
 
 def main():
     # list of methods considered
-    method_list = ['iht', 'sto-iht', 'graph-iht', 'graph-sto-iht', 'graph-svrg-iht']
-    label_list = ['IHT', 'StoIHT', 'GraphIHT', 'GraphStoIHT', 'GraphSVRGIHT']
+    method_list = [
+	#'iht',
+	#'sto-iht',
+	#'graph-iht',
+	#'graph-sto-iht',
+	'graph-svrg-iht'
+	]
+    label_list = [
+	#'IHT',
+	#'StoIHT',
+	#'GraphIHT',
+	#'GraphStoIHT',
+	'GraphSVRGIHT'
+	]
     # 4 different sparsity parameters considered.
     s_list = np.asarray([8, 20, 28, 36])
     # number of measurements list
@@ -775,9 +787,9 @@ def main():
     # height and width of the grid graph.
     height, width = 16, 16
     # maximum number of epochs allowed for all methods.
-    max_epochs = 500
+    max_epochs = 5 #TODO THIS IS TEMPORARY!
     # learning rate ( consistent with Needell's paper)
-    lr = 0.1
+    lr = 0.01
 
     # TODO config the path by yourself.
     root_p = 'results/'
