@@ -314,6 +314,106 @@ def algo_graph_sto_iht(
     return x_err_list, x_iter_err_list, x_err, num_epochs, run_time
 
 
+def calc_grad(x_mat, y_tr, x_hat, block):
+    """ Calculate the gradient w.r.t. the block of data, at x_hat.
+    :param x_mat:   the design matrix.
+    :param y_tr:    the array of measurements.
+    :param x_hat:   the current estimation.
+    :param x_tr_t:  the transpose of the design matrix.
+    :param block:   the block as range.
+    :return:        the gradient.
+    """
+    x_tr_t = np.transpose(x_mat)
+    xtx = np.dot(x_tr_t[:, block], x_mat[block])
+    xty = np.dot(x_tr_t[:, block], y_tr[block])
+    return -2. * (xty - np.dot(xtx, x_hat))
+
+
+def algo_graph_svrg_iht(
+        x_mat, y_tr, max_epochs, lr, x_star, x0, tol_algo, edges, costs, s, b,
+        g=1, root=-1, gamma=0.1, proj_max_num_iter=50, verbose=0):
+    """ Graph Stochastic Iterative Hard Thresholding with Variance Reduction (SVRG).
+    :param x_mat:       the design matrix.
+    :param y_tr:        the array of measurements.
+    :param max_epochs:  the maximum epochs (iterations) allowed.
+    :param lr:          the learning rate (should be 1.0).
+    :param x_star:      the true signal.
+    :param x0:          x0 is the initial point.
+    :param tol_algo:    tolerance parameter for early stopping.
+    :param edges:       edges in the graph.
+    :param costs:       edge costs
+    :param s:           sparsity
+    :param b: the block size
+    :param g:           number of connected component in the true signal.
+    :param root:        the root included in the result (default -1: no root).
+    :param gamma:       to control the upper bound of sparsity.
+    :param proj_max_num_iter: maximum number of iterations of projection.
+    :param verbose: print out some information.
+    :return:            1.  the final estimation error,
+                        2.  number of epochs(iterations) used,
+                        3.  and the run time.
+
+    TODO: Figure out why this diverges instead of converges. Gradient calculations wrong?
+    """
+    np.random.seed()
+    start_time = time.time()
+    x_hat = np.copy(x0)
+    x_tr_t = np.transpose(x_mat)
+
+    # graph projection para
+    h_low = int(len(x0) / 2)
+    h_high = int(h_low * (1. + gamma))
+    t_low = int(s)
+    t_high = int(s * (1. + gamma))
+
+    (n, p) = x_mat.shape
+    # if block size is larger than n,
+    # just treat it as a single block (batch)
+    # just treat it as a single block (batch)
+    b = n if n < b else b
+    num_blocks = int(n) / int(b)
+
+    num_epochs = 0
+    x_err_list = []
+    x_iter_err_list = []
+
+    for epoch_i in range(max_epochs):
+        num_epochs += 1
+        outer_grad = calc_grad(x_mat, y_tr, x_hat, range(n))
+        x_nil = np.copy(x_hat) # copy of outer loop position, to be iteratively updated in the inner loop
+        for _ in range(num_blocks):
+            block_idx = np.random.randint(0, num_blocks) # randomly select a block of data
+            block = range(b * block_idx, b * (block_idx + 1))
+            inner_grad_1 = calc_grad(x_mat, y_tr, x_nil, block) # calculate gradient w.r.t block at x_nil
+            if epoch_i < 1:
+                gradient = inner_grad_1 # no variance reduction in the first epoch
+            else:
+                inner_grad_2 = calc_grad(x_mat, y_tr, x_hat, block)
+                gradient = inner_grad_1 - inner_grad_2 + outer_grad # variance reduction
+            proj_grad = algo_head_tail_bisearch( # head projection of the gradient
+                edges, gradient, costs, g, root, h_low, h_high,
+                proj_max_num_iter, verbose)[1]
+            bt = x_nil - lr * proj_grad # calculate new position
+            proj_bt = algo_head_tail_bisearch( # tail projection of the new position
+                edges, bt, costs, g, root,
+                t_low, t_high, proj_max_num_iter, verbose)[1]
+            x_nil = proj_bt # update position
+            x_iter_err_list.append(np.linalg.norm(x_hat - x_star))
+
+        x_err_list.append(np.linalg.norm(x_hat - x_star))
+
+        x_hat = x_nil # update outer loop position
+        # print("Epoch:", epoch_i, "Residual norm:", np.linalg.norm(y_tr - np.dot(x_mat, x_hat)), "x_hat norm:", np.linalg.norm(x_hat))
+        if np.linalg.norm(x_hat) >= 1e5:  # diverge cases.
+            print("------DIVERGED!!!!!------")
+            break
+        if np.linalg.norm(y_tr - np.dot(x_mat, x_hat)) <= tol_algo:
+            print("~~~~~~CONVERGED!!!!!~~~~~~")
+            break
+    x_err = np.linalg.norm(x_hat - x_star)
+    run_time = time.time() - start_time
+    return x_err_list, x_iter_err_list, x_err, num_epochs, run_time
+
 def print_helper(method, trial_i, b, n, num_epochs, err, run_time):
     print('%13s trial_%03d b: %03d n: %03d num_epochs: %03d '
           'rec_error: %.3e run_time: %.3e' %
@@ -338,17 +438,17 @@ def run_single_test_diff_b(data):
 
     rec_error = []
     # ------------- StoIHT --------
-    x_err_list, _, err, num_epochs, run_time = algo_sto_iht(
-        x_mat=x_mat, y_tr=y_tr, max_epochs=max_epochs, lr=lr, s=s,
-        x_star=x_star, x0=x0, tol_algo=tol_algo, b=b)
-    rec_error.append(('sto-iht', x_err_list))
-    print_helper('sto-iht', trial_i, b, n, num_epochs, err, run_time)
+    #x_err_list, _, err, num_epochs, run_time = algo_sto_iht(
+    #    x_mat=x_mat, y_tr=y_tr, max_epochs=max_epochs, lr=lr, s=s,
+    #    x_star=x_star, x0=x0, tol_algo=tol_algo, b=b)
+    #rec_error.append(('sto-iht', x_err_list))
+    #print_helper('sto-iht', trial_i, b, n, num_epochs, err, run_time)
     # ------------- GraphStoIHT --------
-    x_err_list, _, err, num_epochs, run_time = algo_graph_sto_iht(
+    x_err_list, _, err, num_epochs, run_time = algo_graph_svrg_iht(
         x_mat=x_mat, y_tr=y_tr, max_epochs=max_epochs, lr=lr, x_star=x_star,
         x0=x0, tol_algo=tol_algo, edges=edges, costs=costs, s=s, b=b)
-    rec_error.append(('graph-sto-iht', x_err_list))
-    print_helper('graph-sto-iht', trial_i, b, n, num_epochs, err, run_time)
+    rec_error.append(('graph-svrg-iht', x_err_list))
+    print_helper('graph-svrg-iht', trial_i, b, n, num_epochs, err, run_time)
     return trial_i, b, rec_error
 
 
@@ -370,17 +470,17 @@ def run_single_test_diff_eta(data):
 
     rec_error = []
     # ------------- StoIHT --------
-    _, x_err_iter_list, err, num_epochs, run_time = algo_sto_iht(
-        x_mat=x_mat, y_tr=y_tr, max_epochs=max_epochs, lr=lr, s=s,
-        x_star=x_star, x0=x0, tol_algo=tol_algo, b=b)
-    rec_error.append(('sto-iht', x_err_iter_list))
-    print_helper('sto-iht', trial_i, b, n, num_epochs, err, run_time)
+    #_, x_err_iter_list, err, num_epochs, run_time = algo_sto_iht(
+    #    x_mat=x_mat, y_tr=y_tr, max_epochs=max_epochs, lr=lr, s=s,
+    #    x_star=x_star, x0=x0, tol_algo=tol_algo, b=b)
+    #rec_error.append(('sto-iht', x_err_iter_list))
+    #print_helper('sto-iht', trial_i, b, n, num_epochs, err, run_time)
     # ------------- GraphStoIHT --------
-    _, x_err_iter_list, err, num_epochs, run_time = algo_graph_sto_iht(
+    _, x_err_iter_list, err, num_epochs, run_time = algo_graph_svrg_iht(
         x_mat=x_mat, y_tr=y_tr, max_epochs=max_epochs, lr=lr, x_star=x_star,
         x0=x0, tol_algo=tol_algo, edges=edges, costs=costs, s=s, b=b)
-    rec_error.append(('graph-sto-iht', x_err_iter_list))
-    print_helper('graph-sto-iht', trial_i, b, n, num_epochs, err, run_time)
+    rec_error.append(('graph-svrg-iht', x_err_iter_list))
+    print_helper('graph-svrg-iht', trial_i, b, n, num_epochs, err, run_time)
     return trial_i, lr, rec_error
 
 
@@ -431,15 +531,15 @@ def run_test_diff_b(
     x_len = 30
     sum_results = {method: {trial_i: [None] * len(b_list)
                             for trial_i in range(num_trials)}
-                   for method in ['graph-sto-iht', 'sto-iht']}
+                   for method in ['graph-svrg-iht']}
     # # try to trim 5% of the results (rounding when necessary).
     num_trim = int(trim_ratio * num_trials)
     for trial_i, b, re in results_pool:
         b_ind = list(b_list).index(b)
         for method, rec_err in re:
             sum_results[method][trial_i][b_ind] = rec_err
-    trim_results = {method: dict() for method in ['graph-sto-iht', 'sto-iht']}
-    for method in ['graph-sto-iht', 'sto-iht']:
+    trim_results = {method: dict() for method in ['graph-svrg-iht']}
+    for method in ['graph-svrg-iht']:
         for b_ind in range(len(b_list)):
             average_re = np.zeros((num_trials, x_len))
             for trial_i in sum_results[method]:
@@ -512,14 +612,14 @@ def run_test_diff_eta(
     pool.join()
     sum_results = {method: {trial_i: [None] * len(lr_list)
                             for trial_i in range(num_trials)}
-                   for method in ['graph-sto-iht', 'sto-iht']}
+                   for method in ['graph-svrg-iht']}
     num_trim = int(trim_ratio * num_trials)  # try to trim 5% of the results.
     for trial_i, lr, re in results_pool:
         lr_ind = list(lr_list).index(lr)
         for method, rec_err in re:
             sum_results[method][trial_i][lr_ind] = rec_err
-    trim_results = {method: dict() for method in ['graph-sto-iht', 'sto-iht']}
-    for method in ['graph-sto-iht', 'sto-iht']:
+    trim_results = {method: dict() for method in ['graph-svrg-iht']}
+    for method in ['graph-svrg-iht']:
         for lr_ind in range(len(lr_list)):
             average_re = np.zeros((num_trials, num_iterations))
             for trial_i in sum_results[method]:
@@ -794,8 +894,8 @@ def main():
     # different sparsity parameters considered.
     b_list = [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 180]
     # different learning rate
-    lr_list = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9,
-               1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6]
+    lr_list = [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09,
+               0.1, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16]
 
     # TODO config the path by yourself.
     root_p = 'results/'
@@ -813,11 +913,23 @@ def main():
     if command == 'run_test':
         # learning rate
         num_cpus = int(os.sys.argv[2])
+        re_diff_eta = run_test_diff_eta(s=s,
+                                       p=p,
+                                       lr_list=lr_list,
+                                       height=height,
+                                       width=width,
+                                       num_iterations=2000,
+                                       tol_algo=tol_algo,
+                                       tol_rec=tol_rec,
+                                       b=s,
+                                       trim_ratio=trim_ratio,
+                                       num_cpus=num_cpus,
+                                       num_trials=num_trials)
         re_diff_b = run_test_diff_b(s=s,
                                     p=p,
                                     height=height,
                                     width=width,
-                                    max_epochs=35,
+                                    max_epochs=1,
                                     tol_algo=tol_algo,
                                     tol_rec=tol_rec,
                                     b_list=b_list,
@@ -826,17 +938,17 @@ def main():
                                     num_trials=num_trials)
 
         re_diff_eta = run_test_diff_eta(s=s,
-                                        p=p,
-                                        lr_list=lr_list,
-                                        height=height,
-                                        width=width,
-                                        num_iterations=2000,
-                                        tol_algo=tol_algo,
-                                        tol_rec=tol_rec,
-                                        b=s,
-                                        trim_ratio=trim_ratio,
-                                        num_cpus=num_cpus,
-                                        num_trials=num_trials)
+                                       p=p,
+                                       lr_list=lr_list,
+                                       height=height,
+                                       width=width,
+                                       num_iterations=2000,
+                                       tol_algo=tol_algo,
+                                       tol_rec=tol_rec,
+                                       b=s,
+                                       trim_ratio=trim_ratio,
+                                       num_cpus=num_cpus,
+                                       num_trials=num_trials)
         pickle.dump({'re_diff_b': re_diff_b,
                      're_diff_eta': re_diff_eta},
                     open(save_data_path, 'wb'))

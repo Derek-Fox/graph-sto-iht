@@ -275,7 +275,7 @@ def algo_graph_sto_iht(
     t_low = int(s)
     t_high = int(s * (1. + gamma))
 
-    (n, p) = x_mat.shape
+    n  = x_mat.shape[0]
     # if block size is larger than n,
     # just treat it as a single block (batch)
     b = n if n < b else b
@@ -289,17 +289,16 @@ def algo_graph_sto_iht(
         for _ in range(num_blocks):
             ii = np.random.randint(0, num_blocks)
             block = range(b * ii, b * (ii + 1))
-            xtx = np.dot(x_tr_t[:, block], x_mat[block])
-            xty = np.dot(x_tr_t[:, block], y_tr[block])
-            gradient = -2. * (xty - np.dot(xtx, x_hat))
-            head_nodes, proj_grad = algo_head_tail_bisearch(
+            gradient = calc_grad(x_mat, y_tr, x_hat, x_tr_t, block)
+            proj_grad = algo_head_tail_bisearch(
                 edges, gradient, costs, g, root, h_low, h_high,
-                proj_max_num_iter, verbose)
+                proj_max_num_iter, verbose)[1]
             bt = x_hat - (lr / (prob[ii] * num_blocks)) * proj_grad
-            tail_nodes, proj_bt = algo_head_tail_bisearch(
+            proj_bt = algo_head_tail_bisearch(
                 edges, bt, costs, g, root,
-                t_low, t_high, proj_max_num_iter, verbose)
+                t_low, t_high, proj_max_num_iter, verbose)[1]
             x_hat = proj_bt
+        # print("Epoch:", epoch_i, "Residual norm:", np.linalg.norm(y_tr - np.dot(x_mat, x_hat)), "x_hat norm:", np.linalg.norm(x_hat))
         if np.linalg.norm(x_hat) >= 1e3:  # diverge cases.
             break
         if np.linalg.norm(y_tr - np.dot(x_mat, x_hat)) <= tol_algo:
@@ -308,9 +307,100 @@ def algo_graph_sto_iht(
     run_time = time.time() - start_time
     return x_err, num_epochs, run_time
 
+def calc_grad(x_mat, y_tr, x_hat, block):
+    """ Calculate the gradient w.r.t. the block of data, at x_hat.
+    :param x_mat:   the design matrix.
+    :param y_tr:    the array of measurements.
+    :param x_hat:   the current estimation.
+    :param x_tr_t:  the transpose of the design matrix.
+    :param block:   the block as range.
+    :return:        the gradient.
+    """
+    x_tr_t = np.transpose(x_mat)
+    xtx = np.dot(x_tr_t[:, block], x_mat[block])
+    xty = np.dot(x_tr_t[:, block], y_tr[block])
+    return -2. * (xty - np.dot(xtx, x_hat))
+
+
+def algo_graph_svrg_iht(
+        x_mat, y_tr, max_epochs, lr, x_star, x0, tol_algo, edges, costs, s, b,
+        g=1, root=-1, gamma=0.1, proj_max_num_iter=50, verbose=0):
+    """ Graph Stochastic Iterative Hard Thresholding with Variance Reduction (SVRG).
+    :param x_mat:       the design matrix.
+    :param y_tr:        the array of measurements.
+    :param max_epochs:  the maximum epochs (iterations) allowed.
+    :param lr:          the learning rate (should be 1.0).
+    :param x_star:      the true signal.
+    :param x0:          x0 is the initial point.
+    :param tol_algo:    tolerance parameter for early stopping.
+    :param edges:       edges in the graph.
+    :param costs:       edge costs
+    :param s:           sparsity
+    :param b: the block size
+    :param g:           number of connected component in the true signal.
+    :param root:        the root included in the result (default -1: no root).
+    :param gamma:       to control the upper bound of sparsity.
+    :param proj_max_num_iter: maximum number of iterations of projection.
+    :param verbose: print out some information.
+    :return:            1.  the final estimation error,
+                        2.  number of epochs(iterations) used,
+                        3.  and the run time.
+    TODO: Figure out why this diverges instead of converges. Gradient calculations wrong?
+    """
+    np.random.seed()
+    start_time = time.time()
+    x_hat = np.copy(x0)
+    x_tr_t = np.transpose(x_mat)
+
+    # graph projection para
+    h_low = int(len(x0) / 2)
+    h_high = int(h_low * (1. + gamma))
+    t_low = int(s)
+    t_high = int(s * (1. + gamma))
+
+    (n, p) = x_mat.shape
+    # if block size is larger than n,
+    # just treat it as a single block (batch)
+    b = n if n < b else b
+    num_blocks = int(n) / int(b)
+
+    num_epochs = 0
+
+    for epoch_i in range(max_epochs):
+        num_epochs += 1
+        outer_grad = calc_grad(x_mat, y_tr, x_hat, range(n))/n
+        x_nil = np.copy(x_hat) # copy of outer loop position, to be iteratively updated in the inner loop
+        for _ in range(num_blocks):
+            block_idx = np.random.randint(0, num_blocks) # randomly select a block of data
+            block = range(b * block_idx, b * (block_idx + 1))
+            inner_grad_1 = calc_grad(x_mat, y_tr, x_nil, block) # calculate gradient w.r.t block at x_nil
+            if epoch_i < 1:
+                gradient = inner_grad_1 # no variance reduction in the first epoch
+            else:
+                inner_grad_2 = calc_grad(x_mat, y_tr, x_hat, block)
+                gradient = inner_grad_1 - inner_grad_2 + outer_grad # variance reduction
+            proj_grad = algo_head_tail_bisearch( # head projection of the gradient
+                edges, gradient, costs, g, root, h_low, h_high,
+                proj_max_num_iter, verbose)[1]
+            bt = x_nil - lr * proj_grad # calculate new position
+            proj_bt = algo_head_tail_bisearch( # tail projection of the new position
+                edges, bt, costs, g, root,
+                t_low, t_high, proj_max_num_iter, verbose)[1]
+            x_nil = proj_bt # update position
+        x_hat = x_nil # update outer loop position
+        # print("Epoch:", epoch_i, "Residual norm:", np.linalg.norm(y_tr - np.dot(x_mat, x_hat)), "x_hat norm:", np.linalg.norm(x_hat))
+        if np.linalg.norm(x_hat) >= 1e5:  # diverge cases.
+            print("------DIVERGED!!!!!------")
+            break
+        if np.linalg.norm(y_tr - np.dot(x_mat, x_hat)) <= tol_algo:
+            print("~~~~~~CONVERGED!!!!!~~~~~~")
+    x_err = np.linalg.norm(x_hat - x_star)
+    run_time = time.time() - start_time
+    return x_err, num_epochs, run_time
+
 
 def print_helper(method, trial_i, b, n, num_epochs, err, run_time):
-    print('%13s   trial_%03d b: %02d n: %03d num_epochs: %03d '
+    print('%15s   trial_%03d b: %02d n: %03d num_epochs: %03d '
           'rec_error: %.6e run_time: %.6e' %
           (method, trial_i, b, n, num_epochs, err, run_time))
 
@@ -338,36 +428,45 @@ def run_single_test(data):
 
     for y, flag in zip([y_tr, y_e], ['noise-free', 'with-noise']):
         # ------------- IHT ----------------
-        if b == 2:  # only need to run once.
-            err, num_epochs, run_time = algo_iht(
-                x_mat=x_mat, y_tr=y, max_epochs=max_epochs, lr=lr, s=s,
-                x_star=x_star, x0=x0, tol_algo=tol_algo)
-            rec_err.append(('iht', flag, err))
-            print_helper('iht', trial_i, b, n, num_epochs, err, run_time)
+        # if b == 2:  # only need to run once.
+        #    err, num_epochs, run_time = algo_iht(
+        #        x_mat=x_mat, y_tr=y, max_epochs=max_epochs, lr=lr, s=s,
+        #        x_star=x_star, x0=x0, tol_algo=tol_algo)
+        #    rec_err.append(('iht', flag, err))
+        #    print_helper('iht', trial_i, b, n, num_epochs, err, run_time)
 
         # ------------- StoIHT -------------
-        err, num_epochs, run_time = algo_sto_iht(
-            x_mat=x_mat, y_tr=y, max_epochs=max_epochs, lr=lr, s=s,
-            x_star=x_star, x0=x0, tol_algo=tol_algo, b=b)
-        rec_err.append(('sto-iht', flag, err))
-        print_helper('sto-iht', trial_i, b, n, num_epochs, err, run_time)
+        # err, num_epochs, run_time = algo_sto_iht(
+        #    x_mat=x_mat, y_tr=y, max_epochs=max_epochs, lr=lr, s=s,
+        #    x_star=x_star, x0=x0, tol_algo=tol_algo, b=b)
+        # rec_err.append(('sto-iht', flag, err))
+        # print_helper('sto-iht', trial_i, b, n, num_epochs, err, run_time)
 
         # ------------- GraphIHT -----------
-        if b == 2:  # only need to run once.
-            err, num_epochs, run_time = algo_graph_iht(
-                x_mat=x_mat, y_tr=y, max_epochs=max_epochs, lr=lr,
-                x_star=x_star, x0=x0, tol_algo=tol_algo, edges=edges,
-                costs=costs, s=s)
-            rec_err.append(('graph-iht', flag, err))
-            print_helper('graph-iht', trial_i, b, n, num_epochs, err, run_time)
+        # if b == 2:  # only need to run once.
+        #    err, num_epochs, run_time = algo_graph_iht(
+        #        x_mat=x_mat, y_tr=y, max_epochs=max_epochs, lr=lr,
+        #        x_star=x_star, x0=x0, tol_algo=tol_algo, edges=edges,
+        #        costs=costs, s=s)
+        #    rec_err.append(('graph-iht', flag, err))
+        #    print_helper('graph-iht', trial_i, b, n, num_epochs, err, run_time)
 
         # ------------- GraphStoIHT --------
-        err, num_epochs, run_time = algo_graph_sto_iht(
+        # err, num_epochs, run_time = algo_graph_sto_iht(
+        #     x_mat=x_mat, y_tr=y, max_epochs=max_epochs, lr=lr,
+        #     x_star=x_star, x0=x0, tol_algo=tol_algo, edges=edges, costs=costs,
+        #     s=s, b=b)
+        # rec_err.append(('graph-sto-iht', flag, err))
+        # print_helper('graph-sto-iht', trial_i, s, n, num_epochs, err, run_time)
+        
+        # ------------- GraphSVRG-IHT --------
+        err, num_epochs, run_time = algo_graph_svrg_iht(
             x_mat=x_mat, y_tr=y, max_epochs=max_epochs, lr=lr,
             x_star=x_star, x0=x0, tol_algo=tol_algo, edges=edges, costs=costs,
             s=s, b=b)
-        rec_err.append(('graph-sto-iht', flag, err))
-        print_helper('graph-sto-iht', trial_i, s, n, num_epochs, err, run_time)
+        rec_err.append(('graph-svrg-iht', flag, err))
+        print_helper('graph-svrg-iht', trial_i, s, n, num_epochs, err, run_time)
+        
     return trial_i, b, n, rec_err
 
 
@@ -573,7 +672,7 @@ def main():
     # try 50 different trials and take average on 44 trials.
     num_trials = 50
     # maximum number of epochs
-    max_epochs = 500
+    max_epochs = 1000
     # tolerance of the algorithm
     tol_algo = 1e-7
     # tolerance of the recovery.
@@ -590,11 +689,11 @@ def main():
     # number of measurements list
     n_list = range(20, 201, 5)
     # sparsity considered.
-    s = 8
+    s = 128
     # learning rate
-    lr = 1.0
+    lr = 0.1
     # list of methods
-    method_list = ['iht', 'sto-iht', 'graph-iht', 'graph-sto-iht']
+    method_list = ['iht', 'sto-iht', 'graph-iht', 'graph-sto-iht','graph-svrg-iht']
     command = os.sys.argv[1]
 
     # TODO config by yourself.
@@ -625,7 +724,7 @@ def main():
                           n_list=n_list, method_list=method_list,
                           root_p=root_p)
     elif command == 'show_test':
-        title_list = ['IHT', 'StoIHT', 'GraphIHT', 'GraphStoIHT']
+        title_list = ['IHT', 'StoIHT', 'GraphIHT', 'GraphStoIHT','GraphSVRGIHT']
         show_test(b_list=b_list,
                   method_list=method_list,
                   title_list=title_list, root_p=root_p)
