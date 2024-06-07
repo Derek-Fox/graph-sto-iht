@@ -399,21 +399,6 @@ def algo_graph_sto_iht(
     return x_err, num_epochs, run_time
 
 
-def calc_grad(x_mat, y_tr, x_hat, block):
-    """ Calculate the gradient w.r.t. the block of data, at x_hat.
-    :param x_mat:   the design matrix.
-    :param y_tr:    the array of measurements.
-    :param x_hat:   the current estimation.
-    :param x_tr_t:  the transpose of the design matrix.
-    :param block:   the block as range.
-    :return:        the gradient.
-    """
-    x_tr_t = np.transpose(x_mat)
-    xtx = np.dot(x_tr_t[:, block], x_mat[block])
-    xty = np.dot(x_tr_t[:, block], y_tr[block])
-    return -2. * (xty - np.dot(xtx, x_hat))
-
-
 def algo_graph_svrg_iht(
         x_mat, y_tr, max_epochs, lr, x_star, x0, tol_algo, edges, costs, s, b,
         g=1, root=-1, gamma=0.1, proj_max_num_iter=50, verbose=0):
@@ -490,6 +475,7 @@ def algo_graph_svrg_iht(
     run_time = time.time() - start_time
     return x_err, num_epochs, run_time
 
+
 def algo_graph_scsg_iht(
         x_mat, y_tr, max_epochs, lr, x_star, x0, tol_algo, edges, costs, s, b,
         g=1, root=-1, gamma=0.1, proj_max_num_iter=50, verbose=0):
@@ -537,8 +523,8 @@ def algo_graph_scsg_iht(
         block = get_block(b, num_blocks)
         outer_grad = calc_grad(x_mat, y_tr, x_hat, block)
         x_nil = np.copy(x_hat)
-        for _ in range(b):
-            mini_block = get_block(1, n) # mini block size = 1
+        for _ in range(num_blocks):
+            mini_block = get_block(1, n)  # mini block size = 1
             inner_grad_1 = calc_grad(x_mat, y_tr, x_nil, mini_block)
             if epoch_i < 1:
                 gradient = inner_grad_1
@@ -566,7 +552,27 @@ def algo_graph_scsg_iht(
     return x_err, num_epochs, run_time
 
 
+def calc_grad(x_mat, y_tr, x_hat, block):
+    """ Calculate the gradient w.r.t. the block of data, at x_hat.
+    :param x_mat:   the design matrix.
+    :param y_tr:    the array of measurements.
+    :param x_hat:   the current estimation.
+    :param x_tr_t:  the transpose of the design matrix.
+    :param block:   the block as range.
+    :return:        the gradient.
+    """
+    x_tr_t = np.transpose(x_mat)
+    xtx = np.dot(x_tr_t[:, block], x_mat[block])
+    xty = np.dot(x_tr_t[:, block], y_tr[block])
+    return -2. * (xty - np.dot(xtx, x_hat))
+
+
 def get_block(blk_size, num_blks):
+    """ Get a range object corresponding to the block of data to use for a gradient.
+    :param blk_size: size of the block
+    :param num_blks: number of blocks
+    :return: block as range
+    """
     block_idx = np.random.randint(0, num_blks)
     return range(blk_size * block_idx, blk_size * (block_idx + 1))
 
@@ -600,33 +606,41 @@ def run_single_test(data):
     # print_helper('iht', trial_i, s, n, num_epochs, err, run_time)
 
     # ------------- StoIHT -------------
-    err, num_epochs, run_time = algo_sto_iht(
-        x_mat=x_mat, y_tr=y_tr, max_epochs=max_epochs, lr=lr, s=s,
-        x_star=x_star, x0=x0, tol_algo=tol_algo, b=b)
-    rec_error.append(('sto-iht', err))
-    print_helper('sto-iht', trial_i, s, n, num_epochs, err, run_time)
-
-    # ------------- GraphIHT -----------
-    err, num_epochs, run_time = algo_graph_iht(
-        x_mat=x_mat, y_tr=y_tr, max_epochs=max_epochs, lr=lr, x_star=x_star,
-        x0=x0, tol_algo=tol_algo, edges=edges, costs=costs, s=s)
-    rec_error.append(('graph-iht', err))
-    print_helper('graph-iht', trial_i, s, n, num_epochs, err, run_time)
-
-    # ------------- GraphStoIHT --------
-    err, num_epochs, run_time = algo_graph_sto_iht(
-        x_mat=x_mat, y_tr=y_tr, max_epochs=max_epochs, lr=lr, x_star=x_star,
-        x0=x0, tol_algo=tol_algo, edges=edges, costs=costs, s=s, b=b)
-    rec_error.append(('graph-sto-iht', err))
-    print_helper('graph-sto-iht', trial_i, s, n, num_epochs, err, run_time)
+    # err, num_epochs, run_time = algo_sto_iht(
+    #     x_mat=x_mat, y_tr=y_tr, max_epochs=max_epochs, lr=lr, s=s,
+    #     x_star=x_star, x0=x0, tol_algo=tol_algo, b=b)
+    # rec_error.append(('sto-iht', err))
+    # print_helper('sto-iht', trial_i, s, n, num_epochs, err, run_time)
+    #
+    # # ------------- GraphIHT -----------
+    # err, num_epochs, run_time = algo_graph_iht(
+    #     x_mat=x_mat, y_tr=y_tr, max_epochs=max_epochs, lr=lr, x_star=x_star,
+    #     x0=x0, tol_algo=tol_algo, edges=edges, costs=costs, s=s)
+    # rec_error.append(('graph-iht', err))
+    # print_helper('graph-iht', trial_i, s, n, num_epochs, err, run_time)
+    #
+    # # ------------- GraphStoIHT --------
+    # err, num_epochs, run_time = algo_graph_sto_iht(
+    #     x_mat=x_mat, y_tr=y_tr, max_epochs=max_epochs, lr=lr, x_star=x_star,
+    #     x0=x0, tol_algo=tol_algo, edges=edges, costs=costs, s=s, b=b)
+    # rec_error.append(('graph-sto-iht', err))
+    # print_helper('graph-sto-iht', trial_i, s, n, num_epochs, err, run_time)
 
     # ------------- GraphSVRG-IHT --------
-    err, num_epochs, run_time = algo_graph_svrg_iht(
+    # err, num_epochs, run_time = algo_graph_svrg_iht(
+    #     x_mat=x_mat, y_tr=y_tr, max_epochs=max_epochs, lr=lr,
+    #     x_star=x_star, x0=x0, tol_algo=tol_algo, edges=edges, costs=costs,
+    #     s=s, b=b)
+    # rec_error.append(('graph-svrg-iht', err))
+    # print_helper('graph-svrg-iht', trial_i, s, n, num_epochs, err, run_time)
+
+    # -------------- GraphSCSG-IHT -------
+    err, num_epochs, run_time = algo_graph_scsg_iht(
         x_mat=x_mat, y_tr=y_tr, max_epochs=max_epochs, lr=lr,
         x_star=x_star, x0=x0, tol_algo=tol_algo, edges=edges, costs=costs,
         s=s, b=b)
-    rec_error.append(('graph-svrg-iht', err))
-    print_helper('graph-svrg-iht', trial_i, s, n, num_epochs, err, run_time)
+    rec_error.append(('graph-scsg-iht', err))
+    print_helper('graph-scsg-iht', trial_i, s, n, num_epochs, err, run_time)
 
     return trial_i, n, s, rec_error
 
@@ -639,6 +653,8 @@ def run_test(p, lr, height, max_epochs, width, tol_algo, tol_rec, s_list,
     input_data_list = []
     saved_data = dict()
 
+    num_total_calls = num_trials * len(s_list) * len(n_list)
+    print('Performing %d total trials' % num_total_calls)
     for (s, n, trial_i) in product(s_list, n_list, range(num_trials)):
         print('data pair: (trial_%03d, s: %02d, n: %03d)' % (trial_i, s, n))
         b = int(np.fmin(s, n))
@@ -675,6 +691,11 @@ def run_test(p, lr, height, max_epochs, width, tol_algo, tol_rec, s_list,
     results_pool = pool.map(run_single_test, input_data_list)
     pool.close()
     pool.join()
+    # Non - threaded, if desired. Comment out the above 4 lines and uncomment the below 4 lines.
+    # results_pool = []
+    # for data in input_data_list:
+    #     result = run_single_test(data)
+    #     results_pool.append(result)
     sum_results = {
         method: {s: np.zeros((num_trials, len(n_list))) for s in s_list}
         for method in method_list}
@@ -838,17 +859,19 @@ def main():
     # list of methods considered
     method_list = [
         # 'iht',
-        'sto-iht',
-        'graph-iht',
-        'graph-sto-iht',
-        'graph-svrg-iht'
+        # 'sto-iht',
+        # 'graph-iht',
+        # 'graph-sto-iht',
+        # 'graph-svrg-iht',
+        'graph-scsg-iht'
     ]
     label_list = [
         # 'IHT',
-        'StoIHT',
-        'GraphIHT',
-        'GraphStoIHT',
-        'GraphSVRGIHT'
+        # 'StoIHT',
+        # 'GraphIHT',
+        # 'GraphStoIHT',
+        # 'GraphSVRGIHT',
+        'GraphSCSCIHT'
     ]
     # 4 different sparsity parameters considered.
     s_list = np.asarray([8, 20, 28, 36])
@@ -867,9 +890,9 @@ def main():
     # height and width of the grid graph.
     height, width = 16, 16
     # maximum number of epochs allowed for all methods.
-    max_epochs = 500
+    max_epochs = 250
     # learning rate ( consistent with Needell's paper)
-    lr = 1
+    lr = 0.1
 
     # TODO config the path by yourself.
     root_p = 'results/'
