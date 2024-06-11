@@ -209,6 +209,8 @@ def algo_graph_svrg_iht(
 
     num_epochs = 0
 
+    loss_list = []
+
     for epoch_i in range(max_epochs):
         num_epochs += 1
         outer_grad = calc_grad(x_mat, y_tr, x_hat, range(n))
@@ -240,9 +242,10 @@ def algo_graph_svrg_iht(
             break
         if residual_norm <= tol_algo:
             break
+        loss_list.append((epoch_i, residual_norm))
     x_err = np.linalg.norm(x_hat - x_star)
     run_time = time.time() - start_time
-    return x_err, num_epochs, run_time
+    return loss_list, x_err, num_epochs, run_time
 
 
 def algo_graph_scsg_iht(
@@ -288,6 +291,8 @@ def algo_graph_scsg_iht(
 
     num_epochs = 0
 
+    loss_list = []
+
     for epoch_i in range(max_epochs):
         num_epochs += 1
         block = get_block(b, num_blocks)
@@ -319,9 +324,10 @@ def algo_graph_scsg_iht(
             break
         if residual_norm <= tol_algo:
             break
+        loss_list.append((epoch_i, residual_norm))
     x_err = np.linalg.norm(x_hat - x_star)
     run_time = time.time() - start_time
-    return x_err, num_epochs, run_time
+    return loss_list, x_err, num_epochs, run_time
 
 
 def calc_grad(x_mat, y_tr, x_hat, block):
@@ -354,23 +360,51 @@ def print_helper(method, trial_i, s, n, num_epochs, err, run_time):
           (method, trial_i, s, n, num_epochs, err, run_time))
 
 
+def display_results(results):
+    import matplotlib.pyplot as plt
+    from matplotlib import rc
+    from pylab import rcParams
+
+    for method in methods:
+        name = methods[method]
+        x = [data[0] for data in results[name]]
+        y = [data[1] for data in results[name]]
+        plt.plot(x, y, linestyle='-', marker='.', label=name)
+        plt.legend()
+    dim, s, eta = results['params']
+
+    plt.title("Dimension: %d, Sparsity: %d, Learn Rate: %.2e" % (dim, s, eta))
+    plt.xlabel('Epoch Number')
+    plt.ylabel('Residual Norm (Loss)')
+    test_name = 'tune_params_s=%d_eta=%.1e' % (s, eta) + '.png'
+    # plt.savefig('results/' + test_name, dpi=600, bbox_inches='tight', pad_inches=0,
+    #             format='png')
+    plt.show()
+
+
+
+methods = {
+    algo_graph_svrg_iht: 'GraphSVRG-IHT',
+    algo_graph_scsg_iht: 'GraphSCSG-IHT',
+}
+
+
 def main():
+    s_list = [256, 128, 64, 32]
+    lr_list = [1e-0, 1e-1, 1e-2, 1e-3]
+
+    for (sparsity, learn_rate) in product(s_list, lr_list):
+        run_test(sparsity, learn_rate)
+
+
+def run_test(sparsity=256, learn_rate=1e-3):
     np.random.seed()
-
     # Params:
-    method_list = [
-        algo_graph_svrg_iht,
-        algo_graph_scsg_iht,
-    ]
-
     height, width = 16, 16
     dimension = height * width
-    sparsity = dimension  # to be tuned
     algo_tolerance = 1e-7
-    max_epochs = 10
-    learn_rate = 1e-1
-    block_size = dimension  # to be tuned
-
+    max_epochs = 250
+    block_size = sparsity  # to be tuned
     print('Starting test...')
     print('Grid graph: %d x %d' % (height, width))
     print('Sparsity: %d' % sparsity)
@@ -384,14 +418,17 @@ def main():
     x_star[sub_graph[0]] = np.random.normal(loc=0.0, scale=1.0, size=sparsity)
     x_mat, y_tr, _ = sensing_matrix(dimension, x_star, 0.0)
     x_0 = np.zeros(dimension)
-    g = dimension
-
-    for method in method_list:
-        print('Running %s...' % method.func_name)
-        err, num_epochs, run_time = method(
+    g = sparsity
+    results = {'params': (dimension, sparsity, learn_rate)}
+    for method in methods:
+        name = methods[method]
+        print('Running %s...' % name)
+        loss_list, err, num_epochs, run_time = method(
             x_mat, y_tr, max_epochs, learn_rate, x_star, x_0,
             algo_tolerance, edges, costs, sparsity, block_size, g)
-        print_helper(method.func_name, 0, sparsity, dimension, num_epochs, err, run_time)
+        print_helper(name, 0, sparsity, dimension, num_epochs, err, run_time)
+        results[name] = loss_list
+    display_results(results)
 
 
 if __name__ == '__main__':
