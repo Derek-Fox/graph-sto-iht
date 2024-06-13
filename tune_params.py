@@ -204,7 +204,7 @@ def algo_graph_svrg_iht(
     (n, p) = x_mat.shape
     # if block size is larger than n,
     # just treat it as a single block (batch)
-    b = n if n < b else b
+    b = min(n, b)
     num_blocks = int(n) / int(b)
 
     num_epochs = 0
@@ -249,7 +249,7 @@ def algo_graph_svrg_iht(
 
 
 def algo_graph_scsg_iht(
-        x_mat, y_tr, max_epochs, lr, x_star, x0, tol_algo, edges, costs, s, b, mini_block_size=1,
+        x_mat, y_tr, max_epochs, lr, x_star, x0, tol_algo, edges, costs, s, b,
         g=1, root=-1, gamma=0.1, proj_max_num_iter=50, verbose=0):
     """ Graph Stochastic Iterative Hard Thresholding with Variance Reduction (SVRG).
     :param x_mat:       the design matrix.
@@ -298,8 +298,8 @@ def algo_graph_scsg_iht(
         block = get_block(b, num_blocks)
         outer_grad = calc_grad(x_mat, y_tr, x_hat, block)
         x_nil = np.copy(x_hat)
-        for _ in range(b / mini_block_size):  # option 2 from [1].
-            mini_block = get_block(mini_block_size, int(n / mini_block_size))
+        for _ in range(num_blocks):
+            mini_block = get_block(1, n)
             inner_grad_1 = calc_grad(x_mat, y_tr, x_nil, mini_block)
             if epoch_i < 1:
                 gradient = inner_grad_1
@@ -360,7 +360,7 @@ def print_helper(method, trial_i, s, n, num_epochs, err, run_time):
           (method, trial_i, s, n, num_epochs, err, run_time))
 
 
-def display_results(results):
+def display_results(results, save=False):
     import matplotlib.pyplot as plt
     from matplotlib import rc
     from pylab import rcParams
@@ -371,30 +371,26 @@ def display_results(results):
         y = [data[1] for data in results[name]]
         plt.plot(x, y, linestyle='-', marker='.', label=name)
         plt.legend()
-    dim, s, eta = results['params']
+    dim, s, eta, b = results['params']
 
-    plt.title("Dimension: %d, Sparsity: %d, Learn Rate: %.2e" % (dim, s, eta))
+    ymin, ymax = plt.ylim()
+    if ymax > 1e3:
+        plt.ylim(0, 30)
+
+    plt.title("Dim: %d, Sparsity: %d, Eta: %.2e, Batch: %d" % (dim, s, eta, b))
     plt.xlabel('Epoch Number')
     plt.ylabel('Residual Norm (Loss)')
-    test_name = 'tune_params_s=%d_eta=%.1e' % (s, eta) + '.png'
-    # plt.savefig('results/' + test_name, dpi=600, bbox_inches='tight', pad_inches=0,
-    #             format='png')
+    if save:
+        test_name = 'tune_params_s=%d_eta=%.1e_b=%d.png' % (s, eta, b)
+        plt.savefig('results/' + test_name, dpi=600, bbox_inches='tight', pad_inches=0,
+                    format='png')
     plt.show()
-
 
 
 methods = {
     algo_graph_svrg_iht: 'GraphSVRG-IHT',
     algo_graph_scsg_iht: 'GraphSCSG-IHT',
 }
-
-
-def main():
-    s_list = [256, 128, 64, 32]
-    lr_list = [1e-0, 1e-1, 1e-2, 1e-3]
-
-    for (sparsity, learn_rate) in product(s_list, lr_list):
-        run_test(sparsity, learn_rate)
 
 
 def run_test(sparsity=256, learn_rate=1e-3):
@@ -405,6 +401,8 @@ def run_test(sparsity=256, learn_rate=1e-3):
     algo_tolerance = 1e-7
     max_epochs = 250
     block_size = sparsity  # to be tuned
+    g = sparsity
+
     print('Starting test...')
     print('Grid graph: %d x %d' % (height, width))
     print('Sparsity: %d' % sparsity)
@@ -418,17 +416,26 @@ def run_test(sparsity=256, learn_rate=1e-3):
     x_star[sub_graph[0]] = np.random.normal(loc=0.0, scale=1.0, size=sparsity)
     x_mat, y_tr, _ = sensing_matrix(dimension, x_star, 0.0)
     x_0 = np.zeros(dimension)
-    g = sparsity
-    results = {'params': (dimension, sparsity, learn_rate)}
-    for method in methods:
-        name = methods[method]
+
+    results = {'params': (dimension, sparsity, learn_rate, block_size)}
+    for method, name in methods.items():
         print('Running %s...' % name)
         loss_list, err, num_epochs, run_time = method(
-            x_mat, y_tr, max_epochs, learn_rate, x_star, x_0,
-            algo_tolerance, edges, costs, sparsity, block_size, g)
+            x_mat=x_mat, y_tr=y_tr, max_epochs=max_epochs,
+            lr=learn_rate, x_star=x_star, x0=x_0, tol_algo=algo_tolerance,
+            edges=edges, costs=costs, s=sparsity, b=block_size, g=g,
+        )
         print_helper(name, 0, sparsity, dimension, num_epochs, err, run_time)
         results[name] = loss_list
     display_results(results)
+
+
+def main():
+    s_list = [256, 128, 64, 32]
+    lr_list = [1e-0, 1e-1, 1e-2, 1e-3]
+
+    for (sparsity, learn_rate) in product(s_list, lr_list):
+        run_test(sparsity, learn_rate)
 
 
 if __name__ == '__main__':
