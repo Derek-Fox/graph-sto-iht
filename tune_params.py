@@ -165,6 +165,80 @@ def random_walk(edges, s, init_node=None, restart=0.0):
             next_node = init_node
     return list(subgraph_nodes), list(subgraph_edges)
 
+def algo_graph_sto_iht(
+        x_mat, y_tr, max_epochs, lr, x_star, x0, tol_algo, edges, costs, s, b,
+        g=1, root=-1, gamma=0.1, proj_max_num_iter=50, verbose=0):
+    """ Graph Stochastic Iterative Hard Thresholding.
+    :param x_mat:       the design matrix.
+    :param y_tr:        the array of measurements.
+    :param max_epochs:  the maximum epochs (iterations) allowed.
+    :param lr:          the learning rate (should be 1.0).
+    :param x_star:      the true signal.
+    :param x0:          x0 is the initial point.
+    :param tol_algo:    tolerance parameter for early stopping.
+    :param edges:       edges in the graph.
+    :param costs:       edge costs
+    :param s:           sparsity
+    :param b: the block size
+    :param g:           number of connected component in the true signal.
+    :param root:        the root included in the result (default -1: no root).
+    :param gamma:       to control the upper bound of sparsity.
+    :param proj_max_num_iter: maximum number of iterations of projection.
+    :param verbose: print out some information.
+    :return:            1.  the final estimation error,
+                        2.  number of epochs(iterations) used,
+                        3.  and the run time.
+    """
+    np.random.seed()
+    start_time = time.time()
+    x_hat = np.copy(x0)
+
+    # graph projection para
+    h_low = int(len(x0) / 2)
+    h_high = int(h_low * (1. + gamma))
+    t_low = int(s)
+    t_high = int(s * (1. + gamma))
+
+    (n, p) = x_mat.shape
+    # if block size is larger than n,
+    # just treat it as a single block (batch)
+    b = n if n < b else b
+    num_blocks = int(n) / int(b)
+    prob = [1. / num_blocks] * num_blocks
+
+    num_epochs = 0
+
+    loss_list = []
+
+    for epoch_i in range(max_epochs):
+        num_epochs += 1
+        for _ in range(num_blocks):
+            ii = np.random.randint(0, num_blocks)
+            block = range(b * ii, b * (ii + 1))
+            gradient = calc_grad(x_mat, y_tr, x_hat, block)
+            head_nodes, proj_grad = algo_head_tail_bisearch(
+                edges, gradient, costs, g, root, h_low, h_high,
+                proj_max_num_iter, verbose)
+            bt = x_hat - (lr / (prob[ii] * num_blocks)) * proj_grad
+            tail_nodes, proj_bt = algo_head_tail_bisearch(
+                edges, bt, costs, g, root,
+                t_low, t_high, proj_max_num_iter, verbose)
+            x_hat = proj_bt
+        residual_norm = np.linalg.norm(y_tr - np.dot(x_mat, x_hat))
+        x_err = np.linalg.norm(x_hat - x_star)
+        x_hat_norm = np.linalg.norm(x_hat)
+        # early stopping for diverge cases due to the large learning rate
+        if np.linalg.norm(x_hat) >= 1e5:  # diverge cases.
+            break
+        if residual_norm <= tol_algo:
+            break
+        loss_list.append((epoch_i, residual_norm))
+        print("Epoch: %d, Residual norm: %.6f, x_hat norm: %.6f, x_err: %.6f" % (
+            epoch_i + 1, residual_norm, x_hat_norm, x_err))
+    x_err = np.linalg.norm(x_hat - x_star)
+    run_time = time.time() - start_time
+    return loss_list, x_err, num_epochs, run_time
+
 
 def algo_graph_svrg_iht(
         x_mat, y_tr, max_epochs, lr, x_star, x0, tol_algo, edges, costs, s, b,
@@ -330,6 +404,7 @@ def algo_graph_scsg_iht(
     return loss_list, x_err, num_epochs, run_time
 
 
+
 def calc_grad(x_mat, y_tr, x_hat, block):
     """ Calculate the gradient w.r.t. the block of data, at x_hat.
     :param x_mat:   the design matrix.
@@ -365,11 +440,11 @@ def display_results(results, save=False):
     from matplotlib import rc
     from pylab import rcParams
 
-    for method in methods:
-        name = methods[method]
+    for method, name in method_names.items():
+        marker, color = graph_styles[method]
         x = [data[0] for data in results[name]]
         y = [data[1] for data in results[name]]
-        plt.plot(x, y, linestyle='-', marker='.', label=name)
+        plt.plot(x, y, linestyle='-', marker=marker, markersize=2.5, label=name, color=color)
         plt.legend()
     dim, s, eta, b = results['params']
 
@@ -387,9 +462,16 @@ def display_results(results, save=False):
     plt.show()
 
 
-methods = {
+method_names = {
     algo_graph_svrg_iht: 'GraphSVRG-IHT',
     algo_graph_scsg_iht: 'GraphSCSG-IHT',
+    algo_graph_sto_iht: 'GraphSto-IHT',
+}
+
+graph_styles = {
+    algo_graph_svrg_iht: ('s', 'tab:blue'),
+    algo_graph_scsg_iht: ('D', 'tab:orange'),
+    algo_graph_sto_iht: ('o', 'tab:green'),
 }
 
 
@@ -418,7 +500,7 @@ def run_test(sparsity=256, learn_rate=1e-3):
     x_0 = np.zeros(dimension)
 
     results = {'params': (dimension, sparsity, learn_rate, block_size)}
-    for method, name in methods.items():
+    for method, name in method_names.items():
         print('Running %s...' % name)
         loss_list, err, num_epochs, run_time = method(
             x_mat=x_mat, y_tr=y_tr, max_epochs=max_epochs,
@@ -427,16 +509,16 @@ def run_test(sparsity=256, learn_rate=1e-3):
         )
         print_helper(name, 0, sparsity, dimension, num_epochs, err, run_time)
         results[name] = loss_list
-    display_results(results)
+    return results
 
 
 def main():
-    s_list = [256, 128, 64, 32]
-    lr_list = [1e-0, 1e-1, 1e-2, 1e-3]
+    s_list = [32]
+    lr_list = [1e-1]
 
     for (sparsity, learn_rate) in product(s_list, lr_list):
-        run_test(sparsity, learn_rate)
-
+        results = run_test(sparsity, learn_rate)
+        display_results(results, save=False)
 
 if __name__ == '__main__':
     main()
