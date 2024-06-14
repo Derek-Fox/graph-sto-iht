@@ -14,6 +14,7 @@ import pickle
 import multiprocessing
 from itertools import product
 import numpy as np
+from collections import namedtuple
 
 try:
     import sparse_module
@@ -165,8 +166,9 @@ def random_walk(edges, s, init_node=None, restart=0.0):
             next_node = init_node
     return list(subgraph_nodes), list(subgraph_edges)
 
+
 def algo_graph_sto_iht(
-        x_mat, y_tr, max_epochs, lr, x_star, x0, tol_algo, edges, costs, s, b,
+        x_mat, y_tr, max_epochs, lr, x_star, x0, tol_algo, edges, costs, s, B, b,
         g=1, root=-1, gamma=0.1, proj_max_num_iter=50, verbose=0):
     """ Graph Stochastic Iterative Hard Thresholding.
     :param x_mat:       the design matrix.
@@ -179,7 +181,7 @@ def algo_graph_sto_iht(
     :param edges:       edges in the graph.
     :param costs:       edge costs
     :param s:           sparsity
-    :param b: the block size
+    :param B: the block size
     :param g:           number of connected component in the true signal.
     :param root:        the root included in the result (default -1: no root).
     :param gamma:       to control the upper bound of sparsity.
@@ -202,8 +204,8 @@ def algo_graph_sto_iht(
     (n, p) = x_mat.shape
     # if block size is larger than n,
     # just treat it as a single block (batch)
-    b = n if n < b else b
-    num_blocks = int(n) / int(b)
+    B = n if n < B else B
+    num_blocks = int(n) / int(B)
     prob = [1. / num_blocks] * num_blocks
 
     num_epochs = 0
@@ -214,7 +216,7 @@ def algo_graph_sto_iht(
         num_epochs += 1
         for _ in range(num_blocks):
             ii = np.random.randint(0, num_blocks)
-            block = range(b * ii, b * (ii + 1))
+            block = range(B * ii, B * (ii + 1))
             gradient = calc_grad(x_mat, y_tr, x_hat, block)
             head_nodes, proj_grad = algo_head_tail_bisearch(
                 edges, gradient, costs, g, root, h_low, h_high,
@@ -241,7 +243,7 @@ def algo_graph_sto_iht(
 
 
 def algo_graph_svrg_iht(
-        x_mat, y_tr, max_epochs, lr, x_star, x0, tol_algo, edges, costs, s, b,
+        x_mat, y_tr, max_epochs, lr, x_star, x0, tol_algo, edges, costs, s, B, b,
         g=1, root=-1, gamma=0.1, proj_max_num_iter=50, verbose=0):
     """ Graph Stochastic Iterative Hard Thresholding with Variance Reduction (SVRG).
     :param x_mat:       the design matrix.
@@ -254,7 +256,7 @@ def algo_graph_svrg_iht(
     :param edges:       edges in the graph.
     :param costs:       edge costs
     :param s:           sparsity
-    :param b: the block size
+    :param B: the block size
     :param g:           number of connected component in the true signal.
     :param root:        the root included in the result (default -1: no root).
     :param gamma:       to control the upper bound of sparsity.
@@ -278,7 +280,7 @@ def algo_graph_svrg_iht(
     (n, p) = x_mat.shape
     # if block size is larger than n,
     # just treat it as a single block (batch)
-    b = min(n, b)
+    # B = min(n, B)
     num_blocks = int(n) / int(b)
 
     num_epochs = 0
@@ -290,8 +292,7 @@ def algo_graph_svrg_iht(
         outer_grad = calc_grad(x_mat, y_tr, x_hat, range(n))
         x_nil = np.copy(x_hat)
         for _ in range(num_blocks):
-            # for _ in range(n * 2):  As described in [2]
-            block = get_block(b, num_blocks)
+            block = get_batch(b, n)
             inner_grad_1 = calc_grad(x_mat, y_tr, x_nil, block)
             if epoch_i < 1:
                 gradient = inner_grad_1
@@ -323,7 +324,7 @@ def algo_graph_svrg_iht(
 
 
 def algo_graph_scsg_iht(
-        x_mat, y_tr, max_epochs, lr, x_star, x0, tol_algo, edges, costs, s, b,
+        x_mat, y_tr, max_epochs, lr, x_star, x0, tol_algo, edges, costs, s, B, b,
         g=1, root=-1, gamma=0.1, proj_max_num_iter=50, verbose=0):
     """ Graph Stochastic Iterative Hard Thresholding with Variance Reduction (SVRG).
     :param x_mat:       the design matrix.
@@ -336,7 +337,7 @@ def algo_graph_scsg_iht(
     :param edges:       edges in the graph.
     :param costs:       edge costs
     :param s:           sparsity
-    :param b: the block size
+    :param B: the block size
     :param mini_block_size: the mini block size
     :param g:           number of connected component in the true signal.
     :param root:        the root included in the result (default -1: no root).
@@ -360,8 +361,7 @@ def algo_graph_scsg_iht(
     (n, p) = x_mat.shape
     # if block size is larger than n,
     # just treat it as a single block (batch)
-    b = n if n < b else b
-    num_blocks = int(n) / int(b)
+    B = n if n < B else B
 
     num_epochs = 0
 
@@ -369,11 +369,11 @@ def algo_graph_scsg_iht(
 
     for epoch_i in range(max_epochs):
         num_epochs += 1
-        block = get_block(b, num_blocks)
+        block = get_batch(B, n)
         outer_grad = calc_grad(x_mat, y_tr, x_hat, block)
         x_nil = np.copy(x_hat)
-        for _ in range(num_blocks):
-            mini_block = get_block(1, n)
+        for _ in range(B / b):  # Option 2 in [1]
+            mini_block = get_batch(b, n)
             inner_grad_1 = calc_grad(x_mat, y_tr, x_nil, mini_block)
             if epoch_i < 1:
                 gradient = inner_grad_1
@@ -404,7 +404,6 @@ def algo_graph_scsg_iht(
     return loss_list, x_err, num_epochs, run_time
 
 
-
 def calc_grad(x_mat, y_tr, x_hat, block):
     """ Calculate the gradient w.r.t. the block of data, at x_hat.
     :param x_mat:   the design matrix.
@@ -419,14 +418,15 @@ def calc_grad(x_mat, y_tr, x_hat, block):
     return -2. * (xty - np.dot(xtx, x_hat))
 
 
-def get_block(blk_size, num_blks):
-    """ Get a range object corresponding to the block of data to use for a gradient.
-    :param blk_size: size of the block
-    :param num_blks: number of blocks
-    :return: block as range
+def get_batch(batch_size, n):
+    """ Get a range object corresponding to the batch of data to use for a gradient.
+    :param batch_size: size of the batch
+    :param n: dimension of data sampled from
+    :return: batch as range
     """
-    block_idx = np.random.randint(0, num_blks)
-    return range(blk_size * block_idx, blk_size * (block_idx + 1))
+    num_batches = int(n / batch_size)
+    batch_idx = np.random.randint(0, num_batches)
+    return range(batch_size * batch_idx, batch_size * (batch_idx + 1))
 
 
 def print_helper(method, trial_i, s, n, num_epochs, err, run_time):
@@ -446,20 +446,59 @@ def display_results(results, save=False):
         y = [data[1] for data in results[name]]
         plt.plot(x, y, linestyle='-', marker=marker, markersize=2.5, label=name, color=color)
         plt.legend()
-    dim, s, eta, b = results['params']
+    dim, s, eta, B, b, g = results['params']
 
     ymin, ymax = plt.ylim()
     if ymax > 1e3:
         plt.ylim(0, 30)
 
-    plt.title("Dim: %d, Sparsity: %d, Eta: %.2e, Batch: %d" % (dim, s, eta, b))
+    plt.title("Dim: %d, Sparsity: %d, Eta: %.2e, Batch: %d, Mini-Batch: %d, g: %d" % (dim, s, eta, B, b, g))
     plt.xlabel('Epoch Number')
     plt.ylabel('Residual Norm (Loss)')
-    if save:
-        test_name = 'tune_params_s=%d_eta=%.1e_b=%d.png' % (s, eta, b)
-        plt.savefig('results/' + test_name, dpi=600, bbox_inches='tight', pad_inches=0,
-                    format='png')
+    # if save: # save the plot TODO: update with other params if needed
+    #     test_name = 'tune_params_s=%d_eta=%.1e_b=%d.png' % (s, eta, B)
+    #     plt.savefig('results/' + test_name, dpi=600, bbox_inches='tight', pad_inches=0,
+    #                 format='png')
     plt.show()
+
+
+
+def run_test(sparsity=32, learn_rate=1e-3, batch_size=128, mini_batch_size=2, g=256):
+    np.random.seed()
+    # Params:
+    height, width = 16, 16
+    dimension = height * width
+    algo_tolerance = 1e-7
+    max_epochs = 250
+
+    print('Starting test...')
+    print('Grid graph: %d x %d' % (height, width))
+    print('Sparsity: %d' % sparsity)
+    print('Max epochs: %d' % max_epochs)
+    print('Learning rate: %.2e' % learn_rate)
+    print('Batch size: %d' % batch_size)
+    print('Mini-batch size: %d' % mini_batch_size)
+    print('Connected Components: %d' % g)
+
+    edges, costs = simu_grid_graph(width, height)
+    init_node = (height / 2) * width + width / 2
+    sub_graph = random_walk(edges, sparsity, init_node, 0)
+    x_star = np.zeros(dimension)
+    x_star[sub_graph[0]] = np.random.normal(loc=0.0, scale=1.0, size=sparsity)
+    x_mat, y_tr, _ = sensing_matrix(dimension, x_star, 0.0)
+    x_0 = np.zeros(dimension)
+
+    results = {'params': (dimension, sparsity, learn_rate, batch_size, mini_batch_size, g)}
+    for method, name in method_names.items():
+        print('Running %s...' % name)
+        loss_list, err, num_epochs, run_time = method(
+            x_mat=x_mat, y_tr=y_tr, max_epochs=max_epochs,
+            lr=learn_rate, x_star=x_star, x0=x_0, tol_algo=algo_tolerance,
+            edges=edges, costs=costs, s=sparsity, B=batch_size, g=g, b=mini_batch_size
+        )
+        print_helper(name, 0, sparsity, dimension, num_epochs, err, run_time)
+        results[name] = loss_list
+    return results
 
 
 method_names = {
@@ -475,50 +514,40 @@ graph_styles = {
 }
 
 
-def run_test(sparsity=256, learn_rate=1e-3):
-    np.random.seed()
-    # Params:
-    height, width = 16, 16
-    dimension = height * width
-    algo_tolerance = 1e-7
-    max_epochs = 250
-    block_size = sparsity  # to be tuned
-    g = sparsity
-
-    print('Starting test...')
-    print('Grid graph: %d x %d' % (height, width))
-    print('Sparsity: %d' % sparsity)
-    print('Max epochs: %d' % max_epochs)
-    print('Learning rate: %.2e' % learn_rate)
-    print('Block size: %d' % block_size)
-    edges, costs = simu_grid_graph(width, height)
-    init_node = (height / 2) * width + width / 2
-    sub_graph = random_walk(edges, sparsity, init_node, 0)
-    x_star = np.zeros(dimension)
-    x_star[sub_graph[0]] = np.random.normal(loc=0.0, scale=1.0, size=sparsity)
-    x_mat, y_tr, _ = sensing_matrix(dimension, x_star, 0.0)
-    x_0 = np.zeros(dimension)
-
-    results = {'params': (dimension, sparsity, learn_rate, block_size)}
-    for method, name in method_names.items():
-        print('Running %s...' % name)
-        loss_list, err, num_epochs, run_time = method(
-            x_mat=x_mat, y_tr=y_tr, max_epochs=max_epochs,
-            lr=learn_rate, x_star=x_star, x0=x_0, tol_algo=algo_tolerance,
-            edges=edges, costs=costs, s=sparsity, b=block_size, g=g,
-        )
-        print_helper(name, 0, sparsity, dimension, num_epochs, err, run_time)
-        results[name] = loss_list
-    return results
-
-
 def main():
-    s_list = [32]
-    lr_list = [1e-1]
+    # vary_s_eta()
+
+    # vary_B_b()
+
+    vary_g()
+
+
+def vary_g():
+    # Test num connected components (g)
+    g_list = [256, 128, 64, 32, 16, 8, 4, 2, 1]
+    for g in g_list:
+        results = run_test(g=g)
+        display_results(results, save=False)
+
+
+def vary_B_b():
+    # Test varying batch/minibatch sizes
+    B_list = [256, 128, 64, 32]
+    b_list = [16, 8, 4, 2]
+    for (B, b) in product(B_list, b_list):
+        results = run_test(batch_size=B, mini_batch_size=b)
+        display_results(results, save=False)
+
+
+def vary_s_eta():
+    # Test varying s and eta
+    s_list = [256, 128, 64, 32]
+    lr_list = [1e0, 1e-1, 1e-2, 1e-3]
 
     for (sparsity, learn_rate) in product(s_list, lr_list):
         results = run_test(sparsity, learn_rate)
         display_results(results, save=False)
+
 
 if __name__ == '__main__':
     main()
