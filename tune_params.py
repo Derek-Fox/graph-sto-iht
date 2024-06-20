@@ -14,7 +14,6 @@ import pickle
 import multiprocessing
 from itertools import product
 import numpy as np
-from collections import namedtuple
 
 try:
     import sparse_module
@@ -249,7 +248,7 @@ def algo_graph_svrg_iht(
     :param x_mat:       the design matrix.
     :param y_tr:        the array of measurements.
     :param max_epochs:  the maximum epochs (iterations) allowed.
-    :param lr:          the learning rate (should be 1.0).
+    :param lr:          the learning rate.
     :param x_star:      the true signal.
     :param x0:          x0 is the initial point.
     :param tol_algo:    tolerance parameter for early stopping.
@@ -265,7 +264,6 @@ def algo_graph_svrg_iht(
     :return:            1.  the final estimation error,
                         2.  number of epochs(iterations) used,
                         3.  and the run time.
-    TODO: Figure out why this diverges instead of converges. Gradient calculations wrong?
     """
     np.random.seed()
     start_time = time.time()
@@ -279,9 +277,9 @@ def algo_graph_svrg_iht(
 
     (n, p) = x_mat.shape
     # if block size is larger than n,
-    # just treat it as a single block (batch)
-    # B = min(n, B)
-    num_blocks = int(n) / int(b)
+    # just treat it as a single batch
+    b = min(n, b)
+    num_batches = int(n) / int(b)
 
     num_epochs = 0
 
@@ -291,7 +289,7 @@ def algo_graph_svrg_iht(
         num_epochs += 1
         outer_grad = calc_grad(x_mat, y_tr, x_hat, range(n))
         x_nil = np.copy(x_hat)
-        for _ in range(num_blocks):
+        for _ in range(num_batches):
             block = get_batch(b, n)
             inner_grad_1 = calc_grad(x_mat, y_tr, x_nil, block)
             if epoch_i < 1:
@@ -462,8 +460,7 @@ def display_results(results, save=False):
     plt.show()
 
 
-
-def run_test(sparsity=32, learn_rate=1e-3, batch_size=128, mini_batch_size=2, g=256):
+def run_test(sparsity=64, learn_rate=1e-3, batch_size=128, mini_batch_size=4, g=256):
     np.random.seed()
     # Params:
     height, width = 16, 16
@@ -520,6 +517,7 @@ def main():
     # vary_B_b()
 
     vary_g()
+
 
 
 def vary_g():
