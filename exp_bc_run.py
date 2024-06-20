@@ -245,6 +245,98 @@ def algo_sto_iht_backtracking(
             w_hat = bt_sto
     return w_hat
 
+def algo_graph_svrg_iht_backtracking(
+        x_tr, y_tr, x0, max_epochs, s, edges, costs, num_blocks, lambda_,
+        g=1, root=-1, gamma=0.1, proj_max_num_iter=50, verbose=0):
+    """
+    Graph-SVRG-IHT
+    :params:
+    x_tr: training data
+    y_tr: training labels
+    x0: start point
+    max_epochs: the maximum number of epochs
+    s: sparsity
+    edges: edges in the graph
+    costs: edge costs in the graph
+    num_blocks: the number of blocks
+    lambda_: regularization parameter
+    g: the number of connected components
+    root: root of subgraph, -1 means no root
+    gamma: the parameter for the graph projection
+    proj_max_num_iter: the maximum number of iterations used in binary search
+    verbose: print out some information
+    :return:
+    x_hat: the final point
+    """
+    np.random.seed()  # do not forget it.
+    x_hat = np.copy(x0)
+    (m, p) = x_tr.shape
+    # if the block size is too large. just use single block
+    blk_size = int(m) / int(num_blocks)
+    np_ = np.sum(y_tr == 1)
+    nn_ = np.sum(y_tr == -1)
+    cp = float(nn_) / float(len(y_tr))
+    cn = float(np_) / float(len(y_tr))
+
+    # graph projection para
+    h_low = int((len(x_hat) - 1) / 2)
+    h_high = int(h_low * (1. + gamma))
+    t_low = int(s)
+    t_high = int(s * (1. + gamma))
+
+    for epoch_i in range(max_epochs):
+        loss_sto, outer_grad = logit_loss_grad_bl(
+                x_tr=x_tr, y_tr=y_tr, wt=x_hat,
+                l2_reg=lambda_, cp=cp, cn=cn)
+        x_nil = np.copy(x_hat)
+        for _ in range(num_blocks):
+            block = get_block(blk_size, num_blocks)
+            x_tr_slice, y_tr_slice = x_tr[block, :], y_tr[block]
+            _, inner_grad_1 = logit_loss_grad_bl(
+                x_tr=x_tr_slice, y_tr=y_tr_slice, wt=x_nil,
+                l2_reg=lambda_, cp=cp, cn=cn)
+            if epoch_i < 1:
+                gradient = inner_grad_1
+            else:
+                _, inner_grad_2 = logit_loss_grad_bl(
+                x_tr=x_tr_slice, y_tr=y_tr_slice, wt=x_hat,
+                l2_reg=lambda_, cp=cp, cn=cn)
+                gradient = inner_grad_1 - inner_grad_2 + outer_grad
+            # edges, x, costs, g, root, s_low, s_high, max_num_iter, verbose
+            _, proj_grad = algo_head_tail_bisearch(
+                edges, gradient[:p], costs, g, root, h_low, h_high,
+                proj_max_num_iter, verbose)
+            proj_grad = np.append(proj_grad, gradient[-1])
+            learn_rate = tune_learn_rate(cn, cp, loss_sto, lambda_, proj_grad, x_nil, x_tr_slice, y_tr_slice)
+            bt_sto = np.zeros_like(x_nil)
+            bt_sto[:p] = x_nil[:p] - learn_rate * proj_grad[:p]
+            _, proj_bt = algo_head_tail_bisearch(
+                edges, bt_sto[:p], costs, g, root, t_low, t_high,
+                proj_max_num_iter, verbose)
+            x_nil[:p] = proj_bt[:p]
+            x_nil[p] = x_nil[p] - learn_rate * gradient[p]  # intercept.
+        x_hat = np.copy(x_nil)
+    return x_hat
+
+
+def tune_learn_rate(cn, cp, prev_loss, lambda_, proj_grad, x_hat, x_tr_b, y_tr_b):
+    learn_rate, beta, max_iter = 1.0, 0.8, 20
+    reg_term = np.linalg.norm(proj_grad) ** 2.
+    for _ in range(max_iter):
+        x_tmp = x_hat - learn_rate * proj_grad
+        new_loss = logit_loss_bl(
+            x_tr=x_tr_b, y_tr=y_tr_b, wt=x_tmp,
+            l2_reg=lambda_, cp=cp, cn=cn)
+        if new_loss <= prev_loss - (learn_rate / 2. * reg_term):
+            return learn_rate
+        learn_rate *= beta
+    return learn_rate
+
+def get_block(blk_size, num_blocks):
+    block_idx = randint(0, num_blocks)
+    block = range(blk_size * block_idx, blk_size * (block_idx + 1))
+    return block
+
 
 def run_single_test(para):
     data, method_list, tr_idx, te_idx, s, num_blocks, lambda_, \
@@ -260,47 +352,48 @@ def run_single_test(para):
     te_data['y'] = data['y'][te_idx]
     x_tr, y_tr = tr_data['x'], tr_data['y']
     w0 = np.zeros(np.shape(x_tr)[1] + 1)
-    # --------------------------------
-    # this corresponding (b=1) to IHT
-    w_hat = algo_sto_iht_backtracking(
-        x_tr, y_tr, w0, max_epochs, s, 1, lambda_)
-    x_te, y_te = te_data['x'], te_data['y']
-    pred_prob, pred_y = logistic_predict(x_te, w_hat)
-    posi_idx = np.nonzero(y_te == 1)[0]
-    nega_idx = np.nonzero(y_te == -1)[0]
-    print('-' * 80)
-    print('number of positive: %02d, missed: %02d '
-          'number of negative: %02d, missed: %02d ' %
-          (len(posi_idx), float(np.sum(pred_y[posi_idx] != 1)),
-           len(nega_idx), float(np.sum(pred_y[nega_idx] != -1))))
-    v1 = np.sum(pred_y[posi_idx] != 1) / float(len(posi_idx))
-    v2 = np.sum(pred_y[nega_idx] != -1) / float(len(nega_idx))
-    res['iht']['bacc'] = (v1 + v2) / 2.
-    res['iht']['acc'] = accuracy_score(y_true=y_te, y_pred=pred_y)
-    res['iht']['auc'] = roc_auc_score(y_true=y_te, y_score=pred_prob)
-    res['iht']['perf'] = res['iht']['bacc']
-    res['iht']['w_hat'] = w_hat
-    print('iht           -- sparsity: %02d intercept: %.4f bacc: %.4f '
-          'non-zero: %.2f' %
-          (s, w_hat[-1], res['iht']['bacc'],
-           len(np.nonzero(w_hat)[0]) - 1))
-    # --------------------------------
-    w_hat = algo_sto_iht_backtracking(
-        x_tr, y_tr, w0, max_epochs, s, num_blocks, lambda_)
-    x_te, y_te = te_data['x'], te_data['y']
-    pred_prob, pred_y = logistic_predict(x_te, w_hat)
-    posi_idx = np.nonzero(y_te == 1)[0]
-    nega_idx = np.nonzero(y_te == -1)[0]
-    v1 = np.sum(pred_y[posi_idx] != 1) / float(len(posi_idx))
-    v2 = np.sum(pred_y[nega_idx] != -1) / float(len(nega_idx))
-    res['sto-iht']['bacc'] = (v1 + v2) / 2.
-    res['sto-iht']['acc'] = accuracy_score(y_true=y_te, y_pred=pred_y)
-    res['sto-iht']['auc'] = roc_auc_score(y_true=y_te, y_score=pred_prob)
-    res['sto-iht']['perf'] = res['sto-iht']['bacc']
-    res['sto-iht']['w_hat'] = w_hat
-    print('sto-iht       -- sparsity: %02d intercept: %.4f bacc: %.4f '
-          'non-zero: %.2f' % (s, w_hat[-1], res['sto-iht']['bacc'],
-                              len(np.nonzero(w_hat)[0]) - 1))
+    # # ----- IHT -----
+    # # this corresponding (b=1) to IHT
+    # w_hat = algo_sto_iht_backtracking(
+    #     x_tr, y_tr, w0, max_epochs, s, 1, lambda_)
+    # x_te, y_te = te_data['x'], te_data['y']
+    # pred_prob, pred_y = logistic_predict(x_te, w_hat)
+    # posi_idx = np.nonzero(y_te == 1)[0]
+    # nega_idx = np.nonzero(y_te == -1)[0]
+    # print('-' * 80)
+    # print('number of positive: %02d, missed: %02d '
+    #       'number of negative: %02d, missed: %02d ' %
+    #       (len(posi_idx), float(np.sum(pred_y[posi_idx] != 1)),
+    #        len(nega_idx), float(np.sum(pred_y[nega_idx] != -1))))
+    # v1 = np.sum(pred_y[posi_idx] != 1) / float(len(posi_idx))
+    # v2 = np.sum(pred_y[nega_idx] != -1) / float(len(nega_idx))
+    # res['iht']['bacc'] = (v1 + v2) / 2.
+    # res['iht']['acc'] = accuracy_score(y_true=y_te, y_pred=pred_y)
+    # res['iht']['auc'] = roc_auc_score(y_true=y_te, y_score=pred_prob)
+    # res['iht']['perf'] = res['iht']['bacc']
+    # res['iht']['w_hat'] = w_hat
+    # print('iht           -- sparsity: %02d intercept: %.4f bacc: %.4f '
+    #       'non-zero: %.2f' %
+    #       (s, w_hat[-1], res['iht']['bacc'],
+    #        len(np.nonzero(w_hat)[0]) - 1))
+
+    # # ----- StoIHT -----
+    # w_hat = algo_sto_iht_backtracking(
+    #     x_tr, y_tr, w0, max_epochs, s, num_blocks, lambda_)
+    # x_te, y_te = te_data['x'], te_data['y']
+    # pred_prob, pred_y = logistic_predict(x_te, w_hat)
+    # posi_idx = np.nonzero(y_te == 1)[0]
+    # nega_idx = np.nonzero(y_te == -1)[0]
+    # v1 = np.sum(pred_y[posi_idx] != 1) / float(len(posi_idx))
+    # v2 = np.sum(pred_y[nega_idx] != -1) / float(len(nega_idx))
+    # res['sto-iht']['bacc'] = (v1 + v2) / 2.
+    # res['sto-iht']['acc'] = accuracy_score(y_true=y_te, y_pred=pred_y)
+    # res['sto-iht']['auc'] = roc_auc_score(y_true=y_te, y_score=pred_prob)
+    # res['sto-iht']['perf'] = res['sto-iht']['bacc']
+    # res['sto-iht']['w_hat'] = w_hat
+    # print('sto-iht       -- sparsity: %02d intercept: %.4f bacc: %.4f '
+    #       'non-zero: %.2f' % (s, w_hat[-1], res['sto-iht']['bacc'],
+    #                           len(np.nonzero(w_hat)[0]) - 1))
     tr_data = dict()
     tr_data['x'] = data['x'][tr_idx, :]
     tr_data['y'] = data['y'][tr_idx]
@@ -309,27 +402,28 @@ def run_single_test(para):
     te_data['y'] = data['y'][te_idx]
     x_tr, y_tr = tr_data['x'], tr_data['y']
     w0 = np.zeros(np.shape(x_tr)[1] + 1)
-    # --------------------------------
-    # this corresponding (b=1) to GraphIHT
-    w_hat = algo_graph_sto_iht_backtracking(
-        x_tr, y_tr, w0, max_epochs, s,
-        data['edges'], data['costs'], 1, lambda_)
-    x_te, y_te = te_data['x'], te_data['y']
-    pred_prob, pred_y = logistic_predict(x_te, w_hat)
-    posi_idx = np.nonzero(y_te == 1)[0]
-    nega_idx = np.nonzero(y_te == -1)[0]
-    v1 = np.sum(pred_y[posi_idx] != 1) / float(len(posi_idx))
-    v2 = np.sum(pred_y[nega_idx] != -1) / float(len(nega_idx))
-    res['graph-iht']['bacc'] = (v1 + v2) / 2.
-    res['graph-iht']['acc'] = accuracy_score(y_true=y_te, y_pred=pred_y)
-    res['graph-iht']['auc'] = roc_auc_score(y_true=y_te, y_score=pred_prob)
-    res['graph-iht']['perf'] = res['graph-iht']['bacc']
-    res['graph-iht']['w_hat'] = w_hat
-    print('graph-iht     -- sparsity: %02d intercept: %.4f bacc: %.4f '
-          'non-zero: %.2f' % (s, w_hat[-1], res['graph-iht']['bacc'],
-                              len(np.nonzero(w_hat)[0]) - 1))
 
-    # --------------------------------
+    # # ----- Graph-IHT -----
+    # # this corresponding (b=1) to GraphIHT
+    # w_hat = algo_graph_sto_iht_backtracking(
+    #     x_tr, y_tr, w0, max_epochs, s,
+    #     data['edges'], data['costs'], 1, lambda_)
+    # x_te, y_te = te_data['x'], te_data['y']
+    # pred_prob, pred_y = logistic_predict(x_te, w_hat)
+    # posi_idx = np.nonzero(y_te == 1)[0]
+    # nega_idx = np.nonzero(y_te == -1)[0]
+    # v1 = np.sum(pred_y[posi_idx] != 1) / float(len(posi_idx))
+    # v2 = np.sum(pred_y[nega_idx] != -1) / float(len(nega_idx))
+    # res['graph-iht']['bacc'] = (v1 + v2) / 2.
+    # res['graph-iht']['acc'] = accuracy_score(y_true=y_te, y_pred=pred_y)
+    # res['graph-iht']['auc'] = roc_auc_score(y_true=y_te, y_score=pred_prob)
+    # res['graph-iht']['perf'] = res['graph-iht']['bacc']
+    # res['graph-iht']['w_hat'] = w_hat
+    # print('graph-iht     -- sparsity: %02d intercept: %.4f bacc: %.4f '
+    #       'non-zero: %.2f' % (s, w_hat[-1], res['graph-iht']['bacc'],
+    #                           len(np.nonzero(w_hat)[0]) - 1))
+
+    # ----- Graph-StoIHT -----
     w_hat = algo_graph_sto_iht_backtracking(
         x_tr, y_tr, w0, max_epochs, s,
         data['edges'], data['costs'], num_blocks, lambda_)
@@ -347,6 +441,26 @@ def run_single_test(para):
     print('graph-sto-iht -- sparsity: %02d intercept: %.4f bacc: %.4f '
           'non-zero: %.2f' % (s, w_hat[-1], res['graph-sto-iht']['bacc'],
                               len(np.nonzero(w_hat)[0]) - 1))
+
+    # ----- Graph-SVRG-IHT ------
+    w_hat = algo_graph_svrg_iht_backtracking(
+        x_tr, y_tr, w0, max_epochs, s,
+        data['edges'], data['costs'], num_blocks, lambda_)
+    x_te, y_te = te_data['x'], te_data['y']
+    pred_prob, pred_y = logistic_predict(x_te, w_hat)
+    posi_idx = np.nonzero(y_te == 1)[0]
+    nega_idx = np.nonzero(y_te == -1)[0]
+    v1 = np.sum(pred_y[posi_idx] != 1) / float(len(posi_idx))
+    v2 = np.sum(pred_y[nega_idx] != -1) / float(len(nega_idx))
+    res['graph-svrg-iht']['bacc'] = (v1 + v2) / 2.
+    res['graph-svrg-iht']['acc'] = accuracy_score(y_true=y_te, y_pred=pred_y)
+    res['graph-svrg-iht']['auc'] = roc_auc_score(y_true=y_te, y_score=pred_prob)
+    res['graph-svrg-iht']['perf'] = res['graph-svrg-iht']['bacc']
+    res['graph-svrg-iht']['w_hat'] = w_hat
+    print('graph-svrg-iht -- sparsity: %02d intercept: %.4f bacc: %.4f '
+          'non-zero: %.2f' % (s, w_hat[-1], res['graph-svrg-iht']['bacc'],
+                              len(np.nonzero(w_hat)[0]) - 1))
+
     return s, num_blocks, lambda_, res, fold_i, subfold_i
 
 
@@ -383,56 +497,56 @@ def run_parallel_tr(
             sub_res[subfold_i] = []
         sub_res[subfold_i].append((s, num_blocks, lambda_, re))
     for sf_ii in sub_res:
-        res = {_: dict() for _ in method_list}
-        for _ in method_list:
-            res[_]['s_list'] = s_list
-            res[_]['b_list'] = b_list
-            res[_]['lambda_list'] = lambda_list
-            res[_]['auc'] = dict()
-            res[_]['acc'] = dict()
-            res[_]['bacc'] = dict()
-            res[_]['perf'] = dict()
-            res[_]['w_hat'] = {(s, num_blocks, lambda_): None
+        res = {method: dict() for method in method_list}
+        for method in method_list:
+            res[method]['s_list'] = s_list
+            res[method]['b_list'] = b_list
+            res[method]['lambda_list'] = lambda_list
+            res[method]['auc'] = dict()
+            res[method]['acc'] = dict()
+            res[method]['bacc'] = dict()
+            res[method]['perf'] = dict()
+            res[method]['w_hat'] = {(s, num_blocks, lambda_): None
                                for (s, num_blocks, lambda_) in
                                product(s_list, b_list, lambda_list)}
         for s, num_blocks, lambda_, re in sub_res[sf_ii]:
-            for _ in method_list:
-                res[_]['auc'][(s, num_blocks, lambda_)] = re[_]['auc']
-                res[_]['acc'][(s, num_blocks, lambda_)] = re[_]['acc']
-                res[_]['bacc'][(s, num_blocks, lambda_)] = re[_]['bacc']
-                res[_]['perf'][(s, num_blocks, lambda_)] = re[_]['perf']
-                res[_]['w_hat'][(s, num_blocks, lambda_)] = re[_]['w_hat']
-        for _ in method_list:
+            for method in method_list:
+                res[method]['auc'][(s, num_blocks, lambda_)] = re[method]['auc']
+                res[method]['acc'][(s, num_blocks, lambda_)] = re[method]['acc']
+                res[method]['bacc'][(s, num_blocks, lambda_)] = re[method]['bacc']
+                res[method]['perf'][(s, num_blocks, lambda_)] = re[method]['perf']
+                res[method]['w_hat'][(s, num_blocks, lambda_)] = re[method]['w_hat']
+        for method in method_list:
             for (s, num_blocks, lambda_) in \
                     product(s_list, b_list, lambda_list):
                 key_para = (s, num_blocks, lambda_)
-                s_auc[_][key_para] += res[_]['auc'][key_para]
-                s_acc[_][key_para] += res[_]['acc'][key_para]
-                s_bacc[_][key_para] += res[_]['bacc'][key_para]
+                s_auc[method][key_para] += res[method]['auc'][key_para]
+                s_acc[method][key_para] += res[method]['acc'][key_para]
+                s_bacc[method][key_para] += res[method]['bacc'][key_para]
     # tune by balanced accuracy
     s_star = dict()
-    for _ in method_list:
-        s_star[_] = min(s_bacc[_], key=s_bacc[_].get)
-        best_para = s_star[_]
+    for method in method_list:
+        s_star[method] = min(s_bacc[method], key=s_bacc[method].get)
+        best_para = s_star[method]
         print('tr %15s fold_%2d s: %02d b: %03d lambda: %.4f bacc: %.4f' %
-              (_, fold_i, best_para[0], best_para[1], best_para[2],
-               s_bacc[_][best_para] / 5.0))
+              (method, fold_i, best_para[0], best_para[1], best_para[2],
+               s_bacc[method][best_para] / 5.0))
     return s_star, s_bacc
 
 
 def run_parallel_te(
         data, method_list, tr_idx, te_idx, s_list, b_list,
         lambda_list, max_epochs, num_cpus):
-    res = {_: dict() for _ in method_list}
-    for _ in method_list:
-        res[_]['s_list'] = s_list
-        res[_]['b_list'] = b_list
-        res[_]['lambda_list'] = lambda_list
-        res[_]['auc'] = dict()
-        res[_]['acc'] = dict()
-        res[_]['bacc'] = dict()
-        res[_]['perf'] = dict()
-        res[_]['w_hat'] = {(s, num_blocks, lambda_): None
+    res = {method: dict() for method in method_list}
+    for method in method_list:
+        res[method]['s_list'] = s_list
+        res[method]['b_list'] = b_list
+        res[method]['lambda_list'] = lambda_list
+        res[method]['auc'] = dict()
+        res[method]['acc'] = dict()
+        res[method]['bacc'] = dict()
+        res[method]['perf'] = dict()
+        res[method]['w_hat'] = {(s, num_blocks, lambda_): None
                            for (s, num_blocks, lambda_) in
                            product(s_list, b_list, lambda_list)}
     input_paras = [(data, method_list, tr_idx, te_idx, s, num_block,
@@ -443,12 +557,12 @@ def run_parallel_te(
     pool.close()
     pool.join()
     for s, num_blocks, lambda_, re, fold_i, subfold_i in results_pool:
-        for _ in method_list:
-            res[_]['auc'][(s, num_blocks, lambda_)] = re[_]['auc']
-            res[_]['acc'][(s, num_blocks, lambda_)] = re[_]['acc']
-            res[_]['bacc'][(s, num_blocks, lambda_)] = re[_]['bacc']
-            res[_]['perf'][(s, num_blocks, lambda_)] = re[_]['perf']
-            res[_]['w_hat'][(s, num_blocks, lambda_)] = re[_]['w_hat']
+        for method in method_list:
+            res[method]['auc'][(s, num_blocks, lambda_)] = re[method]['auc']
+            res[method]['acc'][(s, num_blocks, lambda_)] = re[method]['acc']
+            res[method]['bacc'][(s, num_blocks, lambda_)] = re[method]['bacc']
+            res[method]['perf'][(s, num_blocks, lambda_)] = re[method]['perf']
+            res[method]['w_hat'][(s, num_blocks, lambda_)] = re[method]['w_hat']
     return res
 
 
@@ -607,28 +721,28 @@ def run_test(method_list, n_folds, max_epochs, s_list, b_list, lambda_list,
         cv_res[fold_i]['s_list'] = s_list
         cv_res[fold_i]['b_list'] = b_list
         cv_res[fold_i]['lambda_list'] = lambda_list
-        for _ in method_list:
-            cv_res[fold_i][_] = dict()
-            cv_res[fold_i][_]['s_bacc'] = s_bacc[_]
-            cv_res[fold_i][_]['s_star'] = s_star[_]
-            cv_res[fold_i][_]['map_entrez'] = data['map_entrez']
+        for method in method_list:
+            cv_res[fold_i][method] = dict()
+            cv_res[fold_i][method]['s_bacc'] = s_bacc[method]
+            cv_res[fold_i][method]['s_star'] = s_star[method]
+            cv_res[fold_i][method]['map_entrez'] = data['map_entrez']
         res = run_parallel_te(
             f_data, method_list, tr_idx, te_idx, s_list, b_list, lambda_list,
             max_epochs, num_cpus)
-        for _ in method_list:
-            best_para = s_star[_]
+        for method in method_list:
+            best_para = s_star[method]
             print('%15s fold_%2d s: %02d b: %03d lambda: %.4f bacc: %.4f' %
-                  (_, fold_i, best_para[0], best_para[1], best_para[2],
-                   res[_]['bacc'][best_para]))
-            cv_res[fold_i][_]['auc'] = res[_]['auc'][best_para]
-            cv_res[fold_i][_]['acc'] = res[_]['acc'][best_para]
-            cv_res[fold_i][_]['bacc'] = res[_]['bacc'][best_para]
-            cv_res[fold_i][_]['perf'] = res[_]['bacc'][best_para]
-            cv_res[fold_i][_]['w_hat'] = res[_]['w_hat'][best_para]
-    for _ in method_list:
-        re = [cv_res[fold_i][_]['bacc'] for fold_i in range(5)]
+                  (method, fold_i, best_para[0], best_para[1], best_para[2],
+                   res[method]['bacc'][best_para]))
+            cv_res[fold_i][method]['auc'] = res[method]['auc'][best_para]
+            cv_res[fold_i][method]['acc'] = res[method]['acc'][best_para]
+            cv_res[fold_i][method]['bacc'] = res[method]['bacc'][best_para]
+            cv_res[fold_i][method]['perf'] = res[method]['bacc'][best_para]
+            cv_res[fold_i][method]['w_hat'] = res[method]['w_hat'][best_para]
+    for method in method_list:
+        re = [cv_res[fold_i][method]['bacc'] for fold_i in range(n_folds)]
         print('%15s %.4f %.4f %.4f %.4f %.4f' %
-              (_, re[0], re[1], re[2], re[3], re[4]))
+              (method, re[0], re[1], re[2], re[3], re[4]))
     f_name = 'results_exp_bc_%02d_%02d.pkl' % (folding_i, max_epochs)
     pickle.dump(cv_res, open(root_output + f_name, 'wb'))
 
@@ -672,7 +786,7 @@ def summarize_data(method_list, folding_list, num_iterations, root_output):
 
 
 def show_test(nonconvex_method_list, folding_list, max_epochs,
-              root_input, root_output, latex_flag=True):
+              root_input, root_output, latex_flag=False):
     sum_data = summarize_data(nonconvex_method_list,
                               folding_list, max_epochs, root_output)
     all_data = pickle.load(open(root_input + 'overlap_data_summarized.pkl'))
@@ -873,9 +987,15 @@ def show_genes():
 
 
 def main():
-    method_list = ['iht', 'sto-iht', 'graph-iht', 'graph-sto-iht']
+    method_list = [
+        # 'iht',
+        # 'sto-iht',
+        # 'graph-iht',
+        'graph-sto-iht',
+        'graph-svrg-iht',
+    ]
     n_folds = 5
-    s_list = range(10, 101, 5)
+    s_list = range(10, 101, 10) # default 10, 101, 5
     b_list = [1, 2]
     lambda_list = [1e-3, 1e-4]
     folding_list = range(20)
