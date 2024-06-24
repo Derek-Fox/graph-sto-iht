@@ -282,7 +282,7 @@ def algo_graph_svrg_iht(
     num_batches = int(n) / int(b)
 
     num_epochs = 0
-
+    num_iter = 0
     loss_list = []
 
     for epoch_i in range(max_epochs):
@@ -290,6 +290,7 @@ def algo_graph_svrg_iht(
         outer_grad = calc_grad(x_mat, y_tr, x_hat, range(n))
         x_nil = np.copy(x_hat)
         for _ in range(num_batches):
+            num_iter += 1
             block = get_batch(b, n)
             inner_grad_1 = calc_grad(x_mat, y_tr, x_nil, block)
             if epoch_i < 1:
@@ -315,7 +316,8 @@ def algo_graph_svrg_iht(
             break
         if residual_norm <= tol_algo:
             break
-        loss_list.append((epoch_i, residual_norm))
+        num_obs = calc_num_observations(n, b, num_iter, num_batches)
+        loss_list.append((num_obs, residual_norm))
     x_err = np.linalg.norm(x_hat - x_star)
     run_time = time.time() - start_time
     return loss_list, x_err, num_epochs, run_time
@@ -362,7 +364,7 @@ def algo_graph_scsg_iht(
     B = n if n < B else B
 
     num_epochs = 0
-
+    num_iter = 0
     loss_list = []
 
     for epoch_i in range(max_epochs):
@@ -371,6 +373,7 @@ def algo_graph_scsg_iht(
         outer_grad = calc_grad(x_mat, y_tr, x_hat, block)
         x_nil = np.copy(x_hat)
         for _ in range(B / b):  # Option 2 in [1]
+            num_iter += 1
             mini_block = get_batch(b, n)
             inner_grad_1 = calc_grad(x_mat, y_tr, x_nil, mini_block)
             if epoch_i < 1:
@@ -396,11 +399,22 @@ def algo_graph_scsg_iht(
             break
         if residual_norm <= tol_algo:
             break
-        loss_list.append((epoch_i, residual_norm))
+        num_obs = calc_num_observations(B, b, num_iter, (B/b))
+        loss_list.append((num_obs, residual_norm))
     x_err = np.linalg.norm(x_hat - x_star)
     run_time = time.time() - start_time
     return loss_list, x_err, num_epochs, run_time
 
+
+def calc_num_observations(B, b, t, K):
+    """ Calculate the number of observations used by the algorithm.
+    :param B: the outer batch size
+    :param b: the inner batch size
+    :param t: the number of iterations
+    :param K: the number of inner loops
+    :return: the number of observations
+    """
+    return int(B / K) + (b * t)
 
 def calc_grad(x_mat, y_tr, x_hat, block):
     """ Calculate the gradient w.r.t. the block of data, at x_hat.
@@ -450,8 +464,8 @@ def display_results(results, save=False):
     if ymax > 1e3:
         plt.ylim(0, 30)
 
-    plt.title("Dim: %d, Sparsity: %d, Eta: %.2e, Batch: %d, Mini-Batch: %d, g: %d" % (dim, s, eta, B, b, g))
-    plt.xlabel('Epoch Number')
+    plt.title("Dim: %d, s: %d, eta: %.2e, B: %d, b: %d, g: %d" % (dim, s, eta, B, b, g))
+    plt.xlabel('Num Observations')
     plt.ylabel('Residual Norm (Loss)')
     # if save: # save the plot TODO: update with other params if needed
     #     test_name = 'tune_params_s=%d_eta=%.1e_b=%d.png' % (s, eta, B)
@@ -460,13 +474,13 @@ def display_results(results, save=False):
     plt.show()
 
 
-def run_test(sparsity=64, learn_rate=1e-3, batch_size=128, mini_batch_size=4, g=256):
+def run_test(sparsity=256, learn_rate=1e-3, batch_size=128, mini_batch_size=4, g=256):
     np.random.seed()
     # Params:
     height, width = 16, 16
     dimension = height * width
     algo_tolerance = 1e-7
-    max_epochs = 250
+    max_epochs = 15
 
     print('Starting test...')
     print('Grid graph: %d x %d' % (height, width))
@@ -501,7 +515,7 @@ def run_test(sparsity=64, learn_rate=1e-3, batch_size=128, mini_batch_size=4, g=
 method_names = {
     algo_graph_svrg_iht: 'GraphSVRG-IHT',
     algo_graph_scsg_iht: 'GraphSCSG-IHT',
-    algo_graph_sto_iht: 'GraphSto-IHT',
+    # algo_graph_sto_iht: 'GraphSto-IHT',
 }
 
 graph_styles = {
@@ -514,9 +528,9 @@ graph_styles = {
 def main():
     # vary_s_eta()
 
-    # vary_B_b()
+    vary_B_b()
 
-    vary_g()
+    # vary_g()
 
 
 
@@ -530,8 +544,8 @@ def vary_g():
 
 def vary_B_b():
     # Test varying batch/minibatch sizes
-    B_list = [256, 128, 64, 32]
-    b_list = [16, 8, 4, 2]
+    B_list = list(range(256, 200, -10))
+    b_list = [1, 2]
     for (B, b) in product(B_list, b_list):
         results = run_test(batch_size=B, mini_batch_size=b)
         display_results(results, save=False)
@@ -539,8 +553,8 @@ def vary_B_b():
 
 def vary_s_eta():
     # Test varying s and eta
-    s_list = [256, 128, 64, 32]
-    lr_list = [1e0, 1e-1, 1e-2, 1e-3]
+    s_list = [64, 32, 16, 8]
+    lr_list = [1e-2, 1e-3]
 
     for (sparsity, learn_rate) in product(s_list, lr_list):
         results = run_test(sparsity, learn_rate)

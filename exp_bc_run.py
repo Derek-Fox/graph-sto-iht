@@ -245,6 +245,7 @@ def algo_sto_iht_backtracking(
             w_hat = bt_sto
     return w_hat
 
+
 def algo_graph_svrg_iht_backtracking(
         x_tr, y_tr, x0, max_epochs, s, edges, costs, num_blocks, lambda_,
         g=1, root=-1, gamma=0.1, proj_max_num_iter=50, verbose=0):
@@ -270,15 +271,16 @@ def algo_graph_svrg_iht_backtracking(
     """
     np.random.seed()  # do not forget it.
     x_hat = np.copy(x0)
-    (m, p) = x_tr.shape
+    (n, p) = x_tr.shape
     # if the block size is too large. just use single block
-    blk_size = int(m) / int(num_blocks)
+    blk_size = int(n) / int(num_blocks)
+
     np_ = np.sum(y_tr == 1)
     nn_ = np.sum(y_tr == -1)
     cp = float(nn_) / float(len(y_tr))
     cn = float(np_) / float(len(y_tr))
 
-    # graph projection para
+    # graph projection params
     h_low = int((len(x_hat) - 1) / 2)
     h_high = int(h_low * (1. + gamma))
     t_low = int(s)
@@ -286,8 +288,8 @@ def algo_graph_svrg_iht_backtracking(
 
     for epoch_i in range(max_epochs):
         loss_sto, outer_grad = logit_loss_grad_bl(
-                x_tr=x_tr, y_tr=y_tr, wt=x_hat,
-                l2_reg=lambda_, cp=cp, cn=cn)
+            x_tr=x_tr, y_tr=y_tr, wt=x_hat,
+            l2_reg=lambda_, cp=cp, cn=cn)
         x_nil = np.copy(x_hat)
         for _ in range(num_blocks):
             block = get_block(blk_size, num_blocks)
@@ -299,10 +301,84 @@ def algo_graph_svrg_iht_backtracking(
                 gradient = inner_grad_1
             else:
                 _, inner_grad_2 = logit_loss_grad_bl(
-                x_tr=x_tr_slice, y_tr=y_tr_slice, wt=x_hat,
-                l2_reg=lambda_, cp=cp, cn=cn)
+                    x_tr=x_tr_slice, y_tr=y_tr_slice, wt=x_hat,
+                    l2_reg=lambda_, cp=cp, cn=cn)
                 gradient = inner_grad_1 - inner_grad_2 + outer_grad
-            # edges, x, costs, g, root, s_low, s_high, max_num_iter, verbose
+            _, proj_grad = algo_head_tail_bisearch(
+                edges, gradient[:p], costs, g, root, h_low, h_high,
+                proj_max_num_iter, verbose)
+            proj_grad = np.append(proj_grad, gradient[-1])
+            learn_rate = tune_learn_rate(cn, cp, loss_sto, lambda_, proj_grad, x_nil, x_tr_slice, y_tr_slice)
+            bt_sto = np.zeros_like(x_nil)
+            bt_sto[:p] = x_nil[:p] - learn_rate * proj_grad[:p]
+            _, proj_bt = algo_head_tail_bisearch(
+                edges, bt_sto[:p], costs, g, root, t_low, t_high,
+                proj_max_num_iter, verbose)
+            x_nil[:p] = proj_bt[:p]
+            x_nil[p] = x_nil[p] - learn_rate * gradient[p]  # intercept.
+        x_hat = np.copy(x_nil)
+    return x_hat
+
+def algo_graph_scsg_iht_backtracking(
+        x_tr, y_tr, x0, max_epochs, s, edges, costs, num_blocks, mini_blk_size, lambda_,
+        g=1, root=-1, gamma=0.1, proj_max_num_iter=50, verbose=0):
+    """
+    Graph-SVRG-IHT
+    :params:
+    x_tr: training data
+    y_tr: training labels
+    x0: start point
+    max_epochs: the maximum number of epochs
+    s: sparsity
+    edges: edges in the graph
+    costs: edge costs in the graph
+    num_blocks: the number of blocks
+    lambda_: regularization parameter
+    g: the number of connected components
+    root: root of subgraph, -1 means no root
+    gamma: the parameter for the graph projection
+    proj_max_num_iter: the maximum number of iterations used in binary search
+    verbose: print out some information
+    :return:
+    x_hat: the final point
+    """
+    np.random.seed()  # do not forget it.
+    x_hat = np.copy(x0)
+    (n, p) = x_tr.shape
+    # if the block size is too large. just use single block
+    blk_size = int(n) / int(num_blocks)
+
+    np_ = np.sum(y_tr == 1)
+    nn_ = np.sum(y_tr == -1)
+    cp = float(nn_) / float(len(y_tr))
+    cn = float(np_) / float(len(y_tr))
+
+    # graph projection params
+    h_low = int((len(x_hat) - 1) / 2)
+    h_high = int(h_low * (1. + gamma))
+    t_low = int(s)
+    t_high = int(s * (1. + gamma))
+
+    for epoch_i in range(max_epochs):
+        block = get_block(blk_size, num_blocks)
+        x_tr_slice, y_tr_slice = x_tr[block, :], y_tr[block]
+        loss_sto, outer_grad = logit_loss_grad_bl(
+            x_tr=x_tr_slice, y_tr=y_tr_slice, wt=x_hat,
+            l2_reg=lambda_, cp=cp, cn=cn)
+        x_nil = np.copy(x_hat)
+        for _ in range(num_blocks): # num inner loops = B / b
+            mini_block = get_block(mini_blk_size, int(n/mini_blk_size))
+            x_tr_slice, y_tr_slice = x_tr[mini_block, :], y_tr[mini_block]
+            _, inner_grad_1 = logit_loss_grad_bl(
+                x_tr=x_tr_slice, y_tr=y_tr_slice, wt=x_nil,
+                l2_reg=lambda_, cp=cp, cn=cn)
+            if epoch_i < 1:
+                gradient = inner_grad_1
+            else:
+                _, inner_grad_2 = logit_loss_grad_bl(
+                    x_tr=x_tr_slice, y_tr=y_tr_slice, wt=x_hat,
+                    l2_reg=lambda_, cp=cp, cn=cn)
+                gradient = inner_grad_1 - inner_grad_2 + outer_grad
             _, proj_grad = algo_head_tail_bisearch(
                 edges, gradient[:p], costs, g, root, h_low, h_high,
                 proj_max_num_iter, verbose)
@@ -332,6 +408,7 @@ def tune_learn_rate(cn, cp, prev_loss, lambda_, proj_grad, x_hat, x_tr_b, y_tr_b
         learn_rate *= beta
     return learn_rate
 
+
 def get_block(blk_size, num_blocks):
     block_idx = randint(0, num_blocks)
     block = range(blk_size * block_idx, blk_size * (block_idx + 1))
@@ -340,7 +417,7 @@ def get_block(blk_size, num_blocks):
 
 def run_single_test(para):
     data, method_list, tr_idx, te_idx, s, num_blocks, lambda_, \
-    max_epochs, fold_i, subfold_i = para
+        max_epochs, fold_i, subfold_i = para
     from sklearn.metrics import roc_auc_score
     from sklearn.metrics import accuracy_score
     res = {_: dict() for _ in method_list}
@@ -444,8 +521,8 @@ def run_single_test(para):
 
     # ----- Graph-SVRG-IHT ------
     w_hat = algo_graph_svrg_iht_backtracking(
-        x_tr, y_tr, w0, max_epochs, s,
-        data['edges'], data['costs'], num_blocks, lambda_)
+        x_tr=x_tr, y_tr=y_tr, x0=w0, max_epochs=max_epochs, s=s,
+        edges=data['edges'], costs=data['costs'], num_blocks=num_blocks, lambda_=lambda_)
     x_te, y_te = te_data['x'], te_data['y']
     pred_prob, pred_y = logistic_predict(x_te, w_hat)
     posi_idx = np.nonzero(y_te == 1)[0]
@@ -459,6 +536,25 @@ def run_single_test(para):
     res['graph-svrg-iht']['w_hat'] = w_hat
     print('graph-svrg-iht -- sparsity: %02d intercept: %.4f bacc: %.4f '
           'non-zero: %.2f' % (s, w_hat[-1], res['graph-svrg-iht']['bacc'],
+                              len(np.nonzero(w_hat)[0]) - 1))
+
+    # ----- Graph-SCSG-IHT ------
+    w_hat = algo_graph_scsg_iht_backtracking(
+        x_tr=x_tr, y_tr=y_tr, x0=w0, max_epochs=max_epochs, s=s,
+        edges=data['edges'], costs=data['costs'], num_blocks=num_blocks, mini_blk_size=1, lambda_=lambda_)
+    x_te, y_te = te_data['x'], te_data['y']
+    pred_prob, pred_y = logistic_predict(x_te, w_hat)
+    posi_idx = np.nonzero(y_te == 1)[0]
+    nega_idx = np.nonzero(y_te == -1)[0]
+    v1 = np.sum(pred_y[posi_idx] != 1) / float(len(posi_idx))
+    v2 = np.sum(pred_y[nega_idx] != -1) / float(len(nega_idx))
+    res['graph-scsg-iht']['bacc'] = (v1 + v2) / 2.
+    res['graph-scsg-iht']['acc'] = accuracy_score(y_true=y_te, y_pred=pred_y)
+    res['graph-scsg-iht']['auc'] = roc_auc_score(y_true=y_te, y_score=pred_prob)
+    res['graph-scsg-iht']['perf'] = res['graph-scsg-iht']['bacc']
+    res['graph-scsg-iht']['w_hat'] = w_hat
+    print('graph-scsg-iht -- sparsity: %02d intercept: %.4f bacc: %.4f '
+          'non-zero: %.2f' % (s, w_hat[-1], res['graph-scsg-iht']['bacc'],
                               len(np.nonzero(w_hat)[0]) - 1))
 
     return s, num_blocks, lambda_, res, fold_i, subfold_i
@@ -507,8 +603,8 @@ def run_parallel_tr(
             res[method]['bacc'] = dict()
             res[method]['perf'] = dict()
             res[method]['w_hat'] = {(s, num_blocks, lambda_): None
-                               for (s, num_blocks, lambda_) in
-                               product(s_list, b_list, lambda_list)}
+                                    for (s, num_blocks, lambda_) in
+                                    product(s_list, b_list, lambda_list)}
         for s, num_blocks, lambda_, re in sub_res[sf_ii]:
             for method in method_list:
                 res[method]['auc'][(s, num_blocks, lambda_)] = re[method]['auc']
@@ -547,8 +643,8 @@ def run_parallel_te(
         res[method]['bacc'] = dict()
         res[method]['perf'] = dict()
         res[method]['w_hat'] = {(s, num_blocks, lambda_): None
-                           for (s, num_blocks, lambda_) in
-                           product(s_list, b_list, lambda_list)}
+                                for (s, num_blocks, lambda_) in
+                                product(s_list, b_list, lambda_list)}
     input_paras = [(data, method_list, tr_idx, te_idx, s, num_block,
                     lambda_, max_epochs, '', '') for s, num_block, lambda_ in
                    product(s_list, b_list, lambda_list)]
@@ -785,48 +881,28 @@ def summarize_data(method_list, folding_list, num_iterations, root_output):
     return sum_data
 
 
-def show_test(nonconvex_method_list, folding_list, max_epochs,
-              root_input, root_output, latex_flag=False):
-    sum_data = summarize_data(nonconvex_method_list,
-                              folding_list, max_epochs, root_output)
+def show_test(method_list, folding_list, max_epochs, root_input, root_output, latex_flag=False):
+    sum_data = summarize_data(method_list, folding_list, max_epochs, root_output)
     all_data = pickle.load(open(root_input + 'overlap_data_summarized.pkl'))
-    for trial_i in sum_data:
-        for method in nonconvex_method_list:
-            all_data[trial_i]['re_%s' % method] = sum_data[trial_i][method]
-        for method in ['re_%s' % _ for _ in nonconvex_method_list]:
-            re = all_data[trial_i][method]['found_genes']
-            all_data[trial_i]['found_related_genes'][method] = set(re)
-    method_list = ['re_path_re_lasso', 're_path_re_overlap',
-                   're_edge_re_lasso', 're_edge_re_overlap',
-                   're_iht', 're_sto-iht', 're_graph-iht', 're_graph-sto-iht']
+
     all_involved_genes = {method: set() for method in method_list}
     for trial_i in sum_data:
-        for method in nonconvex_method_list:
-            all_data[trial_i]['re_%s' % method] = sum_data[trial_i][method]
-        for method in ['re_%s' % _ for _ in nonconvex_method_list]:
+        for method in method_list:
+            all_data[trial_i][method] = sum_data[trial_i][method]
             re = all_data[trial_i][method]['found_genes']
             all_data[trial_i]['found_related_genes'][method] = set(re)
-        for method in ['re_path_re_lasso', 're_path_re_overlap',
-                       're_edge_re_lasso', 're_edge_re_overlap']:
-            for fold_i in range(5):
-                re = np.nonzero(all_data[trial_i][method]['ws_%d' % fold_i])
-                all_involved_genes[method] = set(re[0]).union(
-                    all_involved_genes[method])
-        for method in ['re_sto-iht', 're_graph-sto-iht']:
             for fold_i in range(5):
                 re = np.nonzero(all_data[trial_i][method]['w_hat_%d' % fold_i])
-                all_involved_genes[method] = set(re[0]).union(
-                    all_involved_genes[method])
+                all_involved_genes[method] = set(re[0]).union(all_involved_genes[method])
     for method in method_list:
         all_involved_genes[method] = len(all_involved_genes[method])
+
     print('_' * 122)
     print('_' * 122)
     for metric in ['bacc', 'auc', 'num_nonzeros']:
         mean_dict = {method: [] for method in method_list}
         print(' '.join(['-' * 54, '%12s' % metric, '-' * 54]))
-        print('            Path-Lasso    Path-Overlap '),
-        print('Edge-Lasso    Edge-Overlap  IHT           StoIHT        '
-              'GraphIHT      GraphStoIHT')
+        print('            GraphSto-IHT  GraphSVRG-IHT')
         for folding_i in folding_list:
             each_re = all_data[folding_i]
             print('Folding_%02d ' % folding_i),
@@ -993,12 +1069,13 @@ def main():
         # 'graph-iht',
         'graph-sto-iht',
         'graph-svrg-iht',
+        'graph-scsg-iht'
     ]
     n_folds = 5
-    s_list = range(10, 101, 10) # default 10, 101, 5
+    s_list = range(10, 101, 10)  # default 10, 101, 5
     b_list = [1, 2]
     lambda_list = [1e-3, 1e-4]
-    folding_list = range(20)
+    folding_list = range(1)
     max_epochs = 40
     root_p = 'results/'
     if not os.path.exists(root_p):
@@ -1016,7 +1093,7 @@ def main():
                      num_cpus=num_cpus, root_input='data/',
                      root_output='results/')
     elif command == 'show_test':
-        show_test(nonconvex_method_list=method_list,
+        show_test(method_list=method_list,
                   folding_list=folding_list, max_epochs=max_epochs,
                   root_input='data/', root_output='results/')
 
