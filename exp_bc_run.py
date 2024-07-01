@@ -154,10 +154,10 @@ def algo_head_tail_bisearch(
 
 
 def algo_graph_sto_iht_backtracking(
-        x_tr, y_tr, w0, max_epochs, s, edges, costs, num_blocks, lambda_,
+        x_tr, y_tr, x0, max_epochs, s, edges, costs, num_blocks, lambda_,
         g=1, root=-1, gamma=0.1, proj_max_num_iter=50, verbose=0):
     np.random.seed()  # do not forget it.
-    w_hat = np.copy(w0)
+    x_hat = np.copy(x0)
     (m, p) = x_tr.shape
     # if the block size is too large. just use single block
     b = int(m) / int(num_blocks)
@@ -167,46 +167,32 @@ def algo_graph_sto_iht_backtracking(
     cn = float(np_) / float(len(y_tr))
 
     # graph projection para
-    h_low = int((len(w_hat) - 1) / 2)
+    h_low = int((len(x_hat) - 1) / 2)
     h_high = int(h_low * (1. + gamma))
     t_low = int(s)
     t_high = int(s * (1. + gamma))
 
     for epoch_i in range(max_epochs):
-        for ind, _ in enumerate(range(num_blocks)):
-            ii = randint(0, num_blocks)
-            block = range(b * ii, b * (ii + 1))
+        for _ in range(num_blocks):
+            block = get_block(b, num_blocks)
             x_tr_b, y_tr_b = x_tr[block, :], y_tr[block]
             loss_sto, grad_sto = logit_loss_grad_bl(
-                x_tr=x_tr_b, y_tr=y_tr_b, wt=w_hat,
+                x_tr=x_tr_b, y_tr=y_tr_b, wt=x_hat,
                 l2_reg=lambda_, cp=cp, cn=cn)
-            # edges, x, costs, g, root, s_low, s_high, max_num_iter, verbose
-            h_nodes, p_grad = algo_head_tail_bisearch(
+            _, proj_grad = algo_head_tail_bisearch(
                 edges, grad_sto[:p], costs, g, root, h_low, h_high,
                 proj_max_num_iter, verbose)
-            p_grad = np.append(p_grad, grad_sto[-1])
-            fun_val_right = loss_sto
-            tmp_num_iter, ad_step, beta = 0, 1.0, 0.8
-            reg_term = np.linalg.norm(p_grad) ** 2.
-            while tmp_num_iter < 20:
-                x_tmp = w_hat - ad_step * p_grad
-                fun_val_left = logit_loss_bl(
-                    x_tr=x_tr_b, y_tr=y_tr_b, wt=x_tmp,
-                    l2_reg=lambda_, cp=cp, cn=cn)
-                if fun_val_left > fun_val_right - ad_step / 2. * reg_term:
-                    ad_step *= beta
-                else:
-                    break
-                tmp_num_iter += 1
-            bt_sto = np.zeros_like(w_hat)
-            bt_sto[:p] = w_hat[:p] - ad_step * p_grad[:p]
-            t_nodes, proj_bt = algo_head_tail_bisearch(
+            proj_grad = np.append(proj_grad, grad_sto[-1])
+            learn_rate = tune_learn_rate(cn, cp, loss_sto, lambda_, proj_grad, x_hat, x_tr_b, y_tr_b)
+            bt_sto = np.zeros_like(x_hat)
+            bt_sto[:p] = x_hat[:p] - learn_rate * proj_grad[:p]
+            _, proj_bt = algo_head_tail_bisearch(
                 edges, bt_sto[:p], costs, g, root, t_low, t_high,
                 proj_max_num_iter, verbose)
-            w_hat[:p] = proj_bt[:p]
-            w_hat[p] = w_hat[p] - ad_step * grad_sto[p]  # intercept.
+            x_hat[:p] = proj_bt[:p]
+            x_hat[p] = x_hat[p] - learn_rate * grad_sto[p]  # intercept.
 
-    return w_hat
+    return x_hat
 
 
 def algo_sto_iht_backtracking(
@@ -319,6 +305,7 @@ def algo_graph_svrg_iht_backtracking(
         x_hat = np.copy(x_nil)
     return x_hat
 
+
 def algo_graph_scsg_iht_backtracking(
         x_tr, y_tr, x0, max_epochs, s, edges, costs, num_blocks, mini_blk_size, lambda_,
         g=1, root=-1, gamma=0.1, proj_max_num_iter=50, verbose=0):
@@ -361,29 +348,29 @@ def algo_graph_scsg_iht_backtracking(
 
     for epoch_i in range(max_epochs):
         block = get_block(blk_size, num_blocks)
-        x_tr_slice, y_tr_slice = x_tr[block, :], y_tr[block]
+        x_tr_b, y_tr_b = x_tr[block, :], y_tr[block]
         loss_sto, outer_grad = logit_loss_grad_bl(
-            x_tr=x_tr_slice, y_tr=y_tr_slice, wt=x_hat,
+            x_tr=x_tr_b, y_tr=y_tr_b, wt=x_hat,
             l2_reg=lambda_, cp=cp, cn=cn)
         x_nil = np.copy(x_hat)
-        for _ in range(num_blocks): # num inner loops = B / b
-            mini_block = get_block(mini_blk_size, int(n/mini_blk_size))
-            x_tr_slice, y_tr_slice = x_tr[mini_block, :], y_tr[mini_block]
+        for _ in range(num_blocks):  # num inner loops = B / b
+            mini_block = get_block(mini_blk_size, int(n / mini_blk_size))
+            x_tr_b, y_tr_b = x_tr[mini_block, :], y_tr[mini_block]
             _, inner_grad_1 = logit_loss_grad_bl(
-                x_tr=x_tr_slice, y_tr=y_tr_slice, wt=x_nil,
+                x_tr=x_tr_b, y_tr=y_tr_b, wt=x_nil,
                 l2_reg=lambda_, cp=cp, cn=cn)
             if epoch_i < 1:
                 gradient = inner_grad_1
             else:
                 _, inner_grad_2 = logit_loss_grad_bl(
-                    x_tr=x_tr_slice, y_tr=y_tr_slice, wt=x_hat,
+                    x_tr=x_tr_b, y_tr=y_tr_b, wt=x_hat,
                     l2_reg=lambda_, cp=cp, cn=cn)
                 gradient = inner_grad_1 - inner_grad_2 + outer_grad
             _, proj_grad = algo_head_tail_bisearch(
                 edges, gradient[:p], costs, g, root, h_low, h_high,
                 proj_max_num_iter, verbose)
             proj_grad = np.append(proj_grad, gradient[-1])
-            learn_rate = tune_learn_rate(cn, cp, loss_sto, lambda_, proj_grad, x_nil, x_tr_slice, y_tr_slice)
+            learn_rate = tune_learn_rate(cn, cp, loss_sto, lambda_, proj_grad, x_nil, x_tr_b, y_tr_b)
             bt_sto = np.zeros_like(x_nil)
             bt_sto[:p] = x_nil[:p] - learn_rate * proj_grad[:p]
             _, proj_bt = algo_head_tail_bisearch(
@@ -396,7 +383,7 @@ def algo_graph_scsg_iht_backtracking(
 
 
 def tune_learn_rate(cn, cp, prev_loss, lambda_, proj_grad, x_hat, x_tr_b, y_tr_b):
-    learn_rate, beta, max_iter = 1.0, 0.8, 20
+    learn_rate, beta, max_iter = 1.0, 0.6, 20
     reg_term = np.linalg.norm(proj_grad) ** 2.
     for _ in range(max_iter):
         x_tmp = x_hat - learn_rate * proj_grad
