@@ -394,7 +394,7 @@ def algo_graph_scsg_iht(
             break
         if residual_norm <= tol_algo:
             break
-        num_obs = calc_num_observations(B, b, num_iter, (B/b))
+        num_obs = calc_num_observations(B, b, num_iter, (B / b))
         loss_list.append((num_obs, residual_norm))
     x_err = np.linalg.norm(x_hat - x_star)
     run_time = time.time() - start_time
@@ -410,6 +410,7 @@ def calc_num_observations(B, b, t, K):
     :return: the number of observations
     """
     return int(B / K) + (b * t)
+
 
 def calc_grad(x_mat, y_tr, x_hat, block):
     """ Calculate the gradient w.r.t. the block of data, at x_hat.
@@ -459,8 +460,8 @@ def display_results(results, save=False):
     if ymax > 1e3:
         plt.ylim(0, 30)
 
-    # plt.title("Dim: %d, s: %d, eta: %.2e, B: %d, b: %d, g: %d" % (dim, s, eta, B, b, g))
-    plt.title("Sparsity: %d, Batch Size: %d" % (s, B))
+    plt.title("Dim: %d, s: %d, eta: %.2e, B: %d, b: %d, g: %d" % (dim, s, eta, B, b, g))
+    # plt.title("Sparsity: %d, Batch Size: %d" % (s, B))
     plt.xlabel('Num Observations')
     plt.ylabel('Residual Norm (Loss)')
     # if save: # save the plot TODO: update with other params if needed
@@ -511,7 +512,7 @@ def run_test(sparsity=8, learn_rate=1e-3, batch_size=128, mini_batch_size=1, g=2
 method_names = {
     algo_graph_svrg_iht: 'GraphSVRG-IHT',
     algo_graph_scsg_iht: 'GraphSCSG-IHT',
-    # algo_graph_sto_iht: 'GraphSto-IHT',
+    algo_graph_sto_iht: 'GraphSto-IHT',
 }
 
 graph_styles = {
@@ -527,7 +528,6 @@ def main():
     vary_B_b()
 
     # vary_g()
-
 
 
 def vary_g():

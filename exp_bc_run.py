@@ -416,48 +416,48 @@ def run_single_test(para):
     te_data['y'] = data['y'][te_idx]
     x_tr, y_tr = tr_data['x'], tr_data['y']
     w0 = np.zeros(np.shape(x_tr)[1] + 1)
-    # # ----- IHT -----
-    # # this corresponding (b=1) to IHT
-    # w_hat = algo_sto_iht_backtracking(
-    #     x_tr, y_tr, w0, max_epochs, s, 1, lambda_)
-    # x_te, y_te = te_data['x'], te_data['y']
-    # pred_prob, pred_y = logistic_predict(x_te, w_hat)
-    # posi_idx = np.nonzero(y_te == 1)[0]
-    # nega_idx = np.nonzero(y_te == -1)[0]
-    # print('-' * 80)
-    # print('number of positive: %02d, missed: %02d '
-    #       'number of negative: %02d, missed: %02d ' %
-    #       (len(posi_idx), float(np.sum(pred_y[posi_idx] != 1)),
-    #        len(nega_idx), float(np.sum(pred_y[nega_idx] != -1))))
-    # v1 = np.sum(pred_y[posi_idx] != 1) / float(len(posi_idx))
-    # v2 = np.sum(pred_y[nega_idx] != -1) / float(len(nega_idx))
-    # res['iht']['bacc'] = (v1 + v2) / 2.
-    # res['iht']['acc'] = accuracy_score(y_true=y_te, y_pred=pred_y)
-    # res['iht']['auc'] = roc_auc_score(y_true=y_te, y_score=pred_prob)
-    # res['iht']['perf'] = res['iht']['bacc']
-    # res['iht']['w_hat'] = w_hat
-    # print('iht           -- sparsity: %02d intercept: %.4f bacc: %.4f '
-    #       'non-zero: %.2f' %
-    #       (s, w_hat[-1], res['iht']['bacc'],
-    #        len(np.nonzero(w_hat)[0]) - 1))
+    # ----- IHT -----
+    # this corresponding (b=1) to IHT
+    w_hat = algo_sto_iht_backtracking(
+        x_tr, y_tr, w0, max_epochs, s, 1, lambda_)
+    x_te, y_te = te_data['x'], te_data['y']
+    pred_prob, pred_y = logistic_predict(x_te, w_hat)
+    posi_idx = np.nonzero(y_te == 1)[0]
+    nega_idx = np.nonzero(y_te == -1)[0]
+    print('-' * 80)
+    print('number of positive: %02d, missed: %02d '
+          'number of negative: %02d, missed: %02d ' %
+          (len(posi_idx), float(np.sum(pred_y[posi_idx] != 1)),
+           len(nega_idx), float(np.sum(pred_y[nega_idx] != -1))))
+    v1 = np.sum(pred_y[posi_idx] != 1) / float(len(posi_idx))
+    v2 = np.sum(pred_y[nega_idx] != -1) / float(len(nega_idx))
+    res['iht']['bacc'] = (v1 + v2) / 2.
+    res['iht']['acc'] = accuracy_score(y_true=y_te, y_pred=pred_y)
+    res['iht']['auc'] = roc_auc_score(y_true=y_te, y_score=pred_prob)
+    res['iht']['perf'] = res['iht']['bacc']
+    res['iht']['w_hat'] = w_hat
+    print('iht           -- sparsity: %02d intercept: %.4f bacc: %.4f '
+          'non-zero: %.2f' %
+          (s, w_hat[-1], res['iht']['bacc'],
+           len(np.nonzero(w_hat)[0]) - 1))
 
-    # # ----- StoIHT -----
-    # w_hat = algo_sto_iht_backtracking(
-    #     x_tr, y_tr, w0, max_epochs, s, num_blocks, lambda_)
-    # x_te, y_te = te_data['x'], te_data['y']
-    # pred_prob, pred_y = logistic_predict(x_te, w_hat)
-    # posi_idx = np.nonzero(y_te == 1)[0]
-    # nega_idx = np.nonzero(y_te == -1)[0]
-    # v1 = np.sum(pred_y[posi_idx] != 1) / float(len(posi_idx))
-    # v2 = np.sum(pred_y[nega_idx] != -1) / float(len(nega_idx))
-    # res['sto-iht']['bacc'] = (v1 + v2) / 2.
-    # res['sto-iht']['acc'] = accuracy_score(y_true=y_te, y_pred=pred_y)
-    # res['sto-iht']['auc'] = roc_auc_score(y_true=y_te, y_score=pred_prob)
-    # res['sto-iht']['perf'] = res['sto-iht']['bacc']
-    # res['sto-iht']['w_hat'] = w_hat
-    # print('sto-iht       -- sparsity: %02d intercept: %.4f bacc: %.4f '
-    #       'non-zero: %.2f' % (s, w_hat[-1], res['sto-iht']['bacc'],
-    #                           len(np.nonzero(w_hat)[0]) - 1))
+    # ----- StoIHT -----
+    w_hat = algo_sto_iht_backtracking(
+        x_tr, y_tr, w0, max_epochs, s, num_blocks, lambda_)
+    x_te, y_te = te_data['x'], te_data['y']
+    pred_prob, pred_y = logistic_predict(x_te, w_hat)
+    posi_idx = np.nonzero(y_te == 1)[0]
+    nega_idx = np.nonzero(y_te == -1)[0]
+    v1 = np.sum(pred_y[posi_idx] != 1) / float(len(posi_idx))
+    v2 = np.sum(pred_y[nega_idx] != -1) / float(len(nega_idx))
+    res['sto-iht']['bacc'] = (v1 + v2) / 2.
+    res['sto-iht']['acc'] = accuracy_score(y_true=y_te, y_pred=pred_y)
+    res['sto-iht']['auc'] = roc_auc_score(y_true=y_te, y_score=pred_prob)
+    res['sto-iht']['perf'] = res['sto-iht']['bacc']
+    res['sto-iht']['w_hat'] = w_hat
+    print('sto-iht       -- sparsity: %02d intercept: %.4f bacc: %.4f '
+          'non-zero: %.2f' % (s, w_hat[-1], res['sto-iht']['bacc'],
+                              len(np.nonzero(w_hat)[0]) - 1))
     tr_data = dict()
     tr_data['x'] = data['x'][tr_idx, :]
     tr_data['y'] = data['y'][tr_idx]
@@ -466,26 +466,6 @@ def run_single_test(para):
     te_data['y'] = data['y'][te_idx]
     x_tr, y_tr = tr_data['x'], tr_data['y']
     w0 = np.zeros(np.shape(x_tr)[1] + 1)
-
-    # # ----- Graph-IHT -----
-    # # this corresponding (b=1) to GraphIHT
-    # w_hat = algo_graph_sto_iht_backtracking(
-    #     x_tr, y_tr, w0, max_epochs, s,
-    #     data['edges'], data['costs'], 1, lambda_)
-    # x_te, y_te = te_data['x'], te_data['y']
-    # pred_prob, pred_y = logistic_predict(x_te, w_hat)
-    # posi_idx = np.nonzero(y_te == 1)[0]
-    # nega_idx = np.nonzero(y_te == -1)[0]
-    # v1 = np.sum(pred_y[posi_idx] != 1) / float(len(posi_idx))
-    # v2 = np.sum(pred_y[nega_idx] != -1) / float(len(nega_idx))
-    # res['graph-iht']['bacc'] = (v1 + v2) / 2.
-    # res['graph-iht']['acc'] = accuracy_score(y_true=y_te, y_pred=pred_y)
-    # res['graph-iht']['auc'] = roc_auc_score(y_true=y_te, y_score=pred_prob)
-    # res['graph-iht']['perf'] = res['graph-iht']['bacc']
-    # res['graph-iht']['w_hat'] = w_hat
-    # print('graph-iht     -- sparsity: %02d intercept: %.4f bacc: %.4f '
-    #       'non-zero: %.2f' % (s, w_hat[-1], res['graph-iht']['bacc'],
-    #                           len(np.nonzero(w_hat)[0]) - 1))
 
     # ----- Graph-StoIHT -----
     w_hat = algo_graph_sto_iht_backtracking(
@@ -1051,9 +1031,8 @@ def show_genes():
 
 def main():
     method_list = [
-        # 'iht',
-        # 'sto-iht',
-        # 'graph-iht',
+        'iht',
+        'sto-iht',
         'graph-sto-iht',
         'graph-svrg-iht',
         'graph-scsg-iht'
