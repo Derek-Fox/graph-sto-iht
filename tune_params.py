@@ -172,10 +172,10 @@ def algo_graph_sto_iht(
     """ Graph Stochastic Iterative Hard Thresholding.
     :param x_mat:       the design matrix.
     :param y_tr:        the array of measurements.
-    :param max_epochs:  the maximum epochs (iterations) allowed.
-    :param lr:          the learning rate (should be 1.0).
+    :param max_epochs:  the maximum epochs allowed.
+    :param lr:          the learning rate.
     :param x_star:      the true signal.
-    :param x0:          x0 is the initial point.
+    :param x0:          the initial point.
     :param tol_algo:    tolerance parameter for early stopping.
     :param edges:       edges in the graph.
     :param costs:       edge costs
@@ -186,9 +186,7 @@ def algo_graph_sto_iht(
     :param gamma:       to control the upper bound of sparsity.
     :param proj_max_num_iter: maximum number of iterations of projection.
     :param verbose: print out some information.
-    :return:            1.  the final estimation error,
-                        2.  number of epochs(iterations) used,
-                        3.  and the run time.
+    :return:            loss list, final x_err, num_epochs, run time
     """
     np.random.seed()
     start_time = time.time()
@@ -205,22 +203,21 @@ def algo_graph_sto_iht(
     # just treat it as a single block (batch)
     B = n if n < B else B
     num_blocks = int(n) / int(B)
-    prob = [1. / num_blocks] * num_blocks
 
     num_epochs = 0
-
+    num_iter = 0
     loss_list = []
 
     for epoch_i in range(max_epochs):
         num_epochs += 1
         for _ in range(num_blocks):
-            ii = np.random.randint(0, num_blocks)
-            block = range(B * ii, B * (ii + 1))
+            num_iter += 1
+            block = get_batch(B, n)
             gradient = calc_grad(x_mat, y_tr, x_hat, block)
             head_nodes, proj_grad = algo_head_tail_bisearch(
                 edges, gradient, costs, g, root, h_low, h_high,
                 proj_max_num_iter, verbose)
-            bt = x_hat - (lr / (prob[ii] * num_blocks)) * proj_grad
+            bt = x_hat - lr * proj_grad
             tail_nodes, proj_bt = algo_head_tail_bisearch(
                 edges, bt, costs, g, root,
                 t_low, t_high, proj_max_num_iter, verbose)
@@ -233,7 +230,8 @@ def algo_graph_sto_iht(
             break
         if residual_norm <= tol_algo:
             break
-        loss_list.append((epoch_i, residual_norm))
+        num_obs = calc_num_observations(0, B, num_iter, num_blocks)
+        loss_list.append((num_obs, residual_norm))
         print("Epoch: %d, Residual norm: %.6f, x_hat norm: %.6f, x_err: %.6f" % (
             epoch_i + 1, residual_norm, x_hat_norm, x_err))
     x_err = np.linalg.norm(x_hat - x_star)
@@ -247,23 +245,22 @@ def algo_graph_svrg_iht(
     """ Graph Stochastic Iterative Hard Thresholding with Variance Reduction (SVRG).
     :param x_mat:       the design matrix.
     :param y_tr:        the array of measurements.
-    :param max_epochs:  the maximum epochs (iterations) allowed.
+    :param max_epochs:  the maximum epochs allowed.
     :param lr:          the learning rate.
     :param x_star:      the true signal.
-    :param x0:          x0 is the initial point.
+    :param x0:          the initial point.
     :param tol_algo:    tolerance parameter for early stopping.
     :param edges:       edges in the graph.
     :param costs:       edge costs
     :param s:           sparsity
-    :param B: the block size
-    :param g:           number of connected component in the true signal.
+    :param B:           the block size (unused)
+    :param b:           the mini block size (unused)
+    :param g:           number of connected components in the true signal.
     :param root:        the root included in the result (default -1: no root).
     :param gamma:       to control the upper bound of sparsity.
     :param proj_max_num_iter: maximum number of iterations of projection.
-    :param verbose: print out some information.
-    :return:            1.  the final estimation error,
-                        2.  number of epochs(iterations) used,
-                        3.  and the run time.
+    :param verbose:     print out some information.
+    :return:            loss list, final x_err, num_epochs, run time
     """
     np.random.seed()
     start_time = time.time()
@@ -278,7 +275,7 @@ def algo_graph_svrg_iht(
     (n, p) = x_mat.shape
     # if block size is larger than n,
     # just treat it as a single batch
-    b = min(n, b)
+    b = 1  # inner gradient always based on single data point
     num_batches = int(n) / int(b)
 
     num_epochs = 0
@@ -326,27 +323,25 @@ def algo_graph_svrg_iht(
 def algo_graph_scsg_iht(
         x_mat, y_tr, max_epochs, lr, x_star, x0, tol_algo, edges, costs, s, B, b,
         g=1, root=-1, gamma=0.1, proj_max_num_iter=50, verbose=0):
-    """ Graph Stochastic Iterative Hard Thresholding with Variance Reduction (SVRG).
+    """ Graph Stochastically Controlled Stochastic Gradients (SCSG) with Iterative Hard Thresholding.
     :param x_mat:       the design matrix.
     :param y_tr:        the array of measurements.
     :param max_epochs:  the maximum epochs (iterations) allowed.
-    :param lr:          the learning rate (should be 1.0).
+    :param lr:          the learning rate.
     :param x_star:      the true signal.
-    :param x0:          x0 is the initial point.
+    :param x0:          the initial point.
     :param tol_algo:    tolerance parameter for early stopping.
     :param edges:       edges in the graph.
     :param costs:       edge costs
     :param s:           sparsity
-    :param B: the block size
-    :param mini_block_size: the mini block size
-    :param g:           number of connected component in the true signal.
+    :param B:           the block size
+    :param b:           the mini block size
+    :param g:           number of connected components in the true signal.
     :param root:        the root included in the result (default -1: no root).
     :param gamma:       to control the upper bound of sparsity.
     :param proj_max_num_iter: maximum number of iterations of projection.
-    :param verbose: print out some information.
-    :return:            1.  the final estimation error,
-                        2.  number of epochs(iterations) used,
-                        3.  and the run time.
+    :param verbose:     print out some information.
+    :return:            loss list, final x_err, num_epochs, run time.
     """
     np.random.seed()
     start_time = time.time()
@@ -464,7 +459,8 @@ def display_results(results, save=False):
     if ymax > 1e3:
         plt.ylim(0, 30)
 
-    plt.title("Dim: %d, s: %d, eta: %.2e, B: %d, b: %d, g: %d" % (dim, s, eta, B, b, g))
+    # plt.title("Dim: %d, s: %d, eta: %.2e, B: %d, b: %d, g: %d" % (dim, s, eta, B, b, g))
+    plt.title("Sparsity: %d, Batch Size: %d" % (s, B))
     plt.xlabel('Num Observations')
     plt.ylabel('Residual Norm (Loss)')
     # if save: # save the plot TODO: update with other params if needed
@@ -474,7 +470,7 @@ def display_results(results, save=False):
     plt.show()
 
 
-def run_test(sparsity=256, learn_rate=1e-3, batch_size=128, mini_batch_size=4, g=256):
+def run_test(sparsity=8, learn_rate=1e-3, batch_size=128, mini_batch_size=1, g=256):
     np.random.seed()
     # Params:
     height, width = 16, 16
@@ -544,10 +540,10 @@ def vary_g():
 
 def vary_B_b():
     # Test varying batch/minibatch sizes
-    B_list = list(range(256, 200, -10))
-    b_list = [1, 2]
-    for (B, b) in product(B_list, b_list):
-        results = run_test(batch_size=B, mini_batch_size=b)
+    B_list = [246]
+    s_list = [32]
+    for B, s in product(B_list, s_list):
+        results = run_test(batch_size=B, sparsity=s)
         display_results(results, save=False)
 
 
